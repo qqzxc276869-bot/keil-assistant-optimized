@@ -19,7 +19,7 @@ Builds and downloads still use the locally installed Keil tools. Adding a `.h` f
 
 Download the `.vsix` from this repository's [Releases](https://github.com/qqzxc276869-bot/keil-assistant-optimized/releases), then run **Extensions: Install from VSIX...** in VS Code. This build's extension ID is `qqzxc276869-bot.keil-assistant-optimized`. If the original `cl.keil-assistant` is installed, disable it first to avoid two extensions handling the same shortcuts and project view.
 
-To build from source, install Node.js and Python, run `npm install`, `npm run check`, and `npm test`, then run `python scripts/package_vsix.py` to produce a VSIX.
+To build from source, install Node.js and Python, run `npm ci --legacy-peer-deps`, `npm run check`, and `npm test`, then run `python scripts/package_vsix.py` to produce a VSIX.
 
 ## [简体中文](./README.md)
 

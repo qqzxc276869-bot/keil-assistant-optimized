@@ -5,4 +5,3 @@ node_modules
 test
 *.vsix
 dist
-package-lock.json

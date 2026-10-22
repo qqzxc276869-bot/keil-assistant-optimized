@@ -2,7 +2,7 @@
     "name": "keil-assistant-optimized",
     "displayName": "Keil Assistant (Optimized)",
     "description": "Manage and build Keil uVision projects from VS Code",
-    "version": "1.7.4",
+    "version": "1.7.5",
     "publisher": "qqzxc276869-bot",
     "author": {
         "name": "Goal",
@@ -344,7 +344,7 @@
         "@types/glob": "^7.1.1",
         "@types/mocha": "^5.2.7",
         "@types/node": "^12.11.7",
-        "@types/vscode": "^1.38.0",
+        "@types/vscode": "1.38.0",
         "@types/xml2js": "^0.4.5",
         "glob": "^7.1.5",
         "mocha": "^6.2.2",
@@ -356,7 +356,7 @@
         "webpack-cli": "^3.3.11"
     },
     "dependencies": {
-        "@types/vscode": "^1.38.0",
-        "xml2js": "^0.4.23"
+        "@types/vscode": "1.38.0",
+        "xml2js": "^0.6.2"
     }
 }

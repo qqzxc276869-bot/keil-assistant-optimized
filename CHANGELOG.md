@@ -2,6 +2,12 @@
 
 All notable changes to the "keil-assistant" extension will be documented in this file.
 
+## [v1.7.5] Update XML parser dependency
+- Upgrade `xml2js` to 0.6.2 to address GHSA-776f-qx25-q3cc in the original dependency
+- Keep the v1.7.4 project-management and build improvements
+
+***
+
 ## [v1.7.4] Manage groups and file references in VS Code
 - Create a Keil group from the project or target tree item
 - Add a saved `.c` or `.h` directly to a Keil group
