@@ -12,4 +12,3 @@ vsc-extension-quickstart.md
 .gitignore
 out
 scripts/**
-webpack.config.js

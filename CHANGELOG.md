@@ -2,6 +2,14 @@
 
 All notable changes to the "keil-assistant" extension will be documented in this file.
 
+## [v1.7.6] Packaging and activation cleanup
+- Replace deprecated `activationEvents: ["*"]` with targeted activation events (project view, A51 language, uVision files in the workspace, and all user commands for VS Code 1.38 compatibility)
+- Remove `@types/vscode` from runtime dependencies
+- Remove the unused webpack configuration and its dev dependencies
+- Update VS Code development tasks to use the current build script
+
+***
+
 ## [v1.7.5] Update XML parser dependency
 - Upgrade `xml2js` to 0.6.2 to address GHSA-776f-qx25-q3cc in the original dependency
 - Keep the v1.7.4 project-management and build improvements
