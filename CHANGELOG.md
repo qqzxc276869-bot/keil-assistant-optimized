@@ -2,6 +2,15 @@
 
 All notable changes to the "keil-assistant" extension will be documented in this file.
 
+## [v1.7.7] Reliability and packaging review
+- Preserve the loaded project tree when a Keil project save is temporarily incomplete, and continue watching after atomic file replacement
+- Fix UNC source paths, the build directory when no VS Code workspace is open, and IntelliSense configuration collisions between projects with the same target name
+- Load targets with omitted optional group, include-path, or macro fields
+- Preserve XML attributes when expanding empty self-closing groups or file lists
+- Include the linked MIT license in the VSIX, clean stale compiled files before packaging, and remove unused development dependencies
+
+***
+
 ## [v1.7.6] Packaging and activation cleanup
 - Replace deprecated `activationEvents: ["*"]` with targeted activation events (project view, A51 language, uVision files in the workspace, and all user commands for VS Code 1.38 compatibility)
 - Remove `@types/vscode` from runtime dependencies

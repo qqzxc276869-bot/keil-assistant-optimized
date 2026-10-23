@@ -12,7 +12,7 @@ OUTPUT = ROOT / f"keil-assistant-{PACKAGE['version']}-optimized.vsix"
 
 FILES = [
     ROOT / name
-    for name in ("package.json", "README.md", "README_EN.md", "CHANGELOG.md")
+    for name in ("package.json", "README.md", "README_EN.md", "CHANGELOG.md", "LICENSE")
 ]
 for directory in ("bin", "dist", "res", "syntaxes"):
     FILES.extend(path for path in (ROOT / directory).rglob("*") if path.is_file())
@@ -76,5 +76,7 @@ with ZipFile(OUTPUT) as archive:
         raise SystemExit("VSIX archive validation failed")
     if "extension/" + PACKAGE["main"].lstrip("./") not in archive.namelist():
         raise SystemExit("VSIX is missing its main JavaScript file")
+    if "extension/LICENSE" not in archive.namelist():
+        raise SystemExit("VSIX is missing the README license link target")
 
 print(OUTPUT)

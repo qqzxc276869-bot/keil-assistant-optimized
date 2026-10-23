@@ -19,7 +19,7 @@
 
 从本仓库的 [Releases](https://github.com/qqzxc276869-bot/keil-assistant-optimized/releases) 下载 `.vsix`，在 VS Code 中运行 **Extensions: Install from VSIX...** 选择它。此版的扩展标识为 `qqzxc276869-bot.keil-assistant-optimized`；如果已安装原版 `cl.keil-assistant`，建议先停用原版，避免两个扩展同时响应快捷键和工程视图。
 
-从源码构建：安装 Node.js 和 Python，运行 `npm ci --legacy-peer-deps`、`npm run check`、`npm test`，然后运行 `python scripts/package_vsix.py` 生成 VSIX。
+从源码构建：安装 Node.js 和 Python，运行 `npm ci`、`npm run check`、`npm test`，然后运行 `python scripts/package_vsix.py` 生成 VSIX。
 
 ## [English](./README_EN.md)
 

@@ -3,7 +3,20 @@ const path = require('path');
 const ts = require('typescript');
 
 const root = path.resolve(__dirname, '..');
-const outputRoot = path.join(root, 'dist');
+const outputRoot = path.resolve(root, 'dist');
+
+// Only remove the fixed generated output directory in this repository.
+if (path.dirname(outputRoot) !== root || path.basename(outputRoot) !== 'dist') {
+    throw new Error(`Refusing to clean unexpected build output: ${outputRoot}`);
+}
+if (fs.existsSync(outputRoot)) {
+    const realRoot = fs.realpathSync(root);
+    const realOutput = fs.realpathSync(outputRoot);
+    if (realOutput !== path.join(realRoot, 'dist') || fs.lstatSync(outputRoot).isSymbolicLink()) {
+        throw new Error(`Refusing to clean output outside the repository: ${outputRoot}`);
+    }
+    fs.rmSync(outputRoot, { recursive: true, force: true });
+}
 
 function compileDirectory(directory) {
     for (const entry of fs.readdirSync(path.join(root, directory), { withFileTypes: true })) {

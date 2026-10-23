@@ -24,6 +24,7 @@ const state = new Map();
 const events = [];
 let provider;
 let latestTask;
+let latestTerminalOptions;
 let dialogSelection;
 const folder = { name: 'outer', uri: { fsPath: testRoot } };
 const vscode = {
@@ -58,7 +59,13 @@ const vscode = {
             return options.find((option) => typeof option === 'string' && /remove/i.test(option));
         },
         showInformationMessage: (message) => { events.push(`info:${message}`); },
-        terminals: []
+        terminals: [],
+        createTerminal: (options) => {
+            latestTerminalOptions = options;
+            const terminal = { name: options.name, show() {}, sendText() {}, hide() {}, dispose() {} };
+            vscode.window.terminals.push(terminal);
+            return terminal;
+        }
     },
     env: { shell: 'powershell.exe', clipboard: { writeText() {} } },
     Task: class {
@@ -95,6 +102,9 @@ async function main() {
     const projects = provider.getChildren();
     assert.strictEqual(projects.length, 1, 'nested project should load');
     assert.strictEqual(projects[0].uvprjFile.path, projectPath);
+    const uncPath = '\\\\server\\share\\include\\board.h';
+    assert.strictEqual(projects[0].toAbsolutePath(uncPath), path.normalize(uncPath),
+        'UNC include paths must remain absolute');
     assert.ok(!events.some((value) => value === 'command:vscode.openFolder'), 'workspace should stay open');
     assert.deepStrictEqual(state.get('KeilAssistant.SelectedProjects'), [projectPath]);
 
@@ -147,11 +157,92 @@ async function main() {
     assert.ok(!fs.readFileSync(projectPath, 'utf8').includes('<FileName>new.c</FileName>'),
         'removed source should be absent from .uvprojx');
 
+    const oldTarget = provider.getChildren(projects[0])[0];
+    const originalRead = projects[0].uvprjFile.Read;
+    projects[0].uvprjFile.Read = () => '<Project><Targets>';
+    try {
+        await assert.rejects(() => projects[0].reload(),
+            'an incomplete Keil save should fail without clearing the loaded target');
+    } finally {
+        projects[0].uvprjFile.Read = originalRead;
+    }
+    assert.strictEqual(provider.getChildren(projects[0])[0], oldTarget,
+        'reload failure must preserve the previously loaded project tree');
+    await projects[0].reload();
+
+    async function waitForGroup(groupName) {
+        for (let attempt = 0; attempt < 50; attempt++) {
+            const currentTarget = provider.getChildren(projects[0])[0];
+            if (provider.getChildren(currentTarget).some((item) => item.label === groupName)) { return; }
+            await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        throw new Error(`The project watcher missed an atomic save adding ${groupName}`);
+    }
+    function atomicGroupSave(groupName) {
+        const current = fs.readFileSync(projectPath, 'utf8');
+        const updated = current.replace('</Groups>', `<Group><GroupName>${groupName}</GroupName></Group></Groups>`);
+        const temporary = `${projectPath}.tmp`;
+        fs.writeFileSync(temporary, updated);
+        fs.renameSync(temporary, projectPath);
+    }
+    atomicGroupSave('Watched One');
+    await waitForGroup('Watched One');
+    atomicGroupSave('Watched Two');
+    await waitForGroup('Watched Two');
+
     await commands.get('project.close')(projects[0]);
+    projects[0].close();
     latestTask = undefined;
     await commands.get('project.build')();
     assert.strictEqual(latestTask, undefined, 'F7 should not build a closed project');
-    console.log('Smoke test passed: nested discovery, workspace config, save/build order, add/create group/remove, close/F7.');
+
+    const secondPath = path.join(testRoot, 'Second.uvprojx');
+    const secondXml = fs.readFileSync(projectPath, 'utf8')
+        .replace(/<VariousControls>[\s\S]*?<\/VariousControls>/, '')
+        .replace(/<Groups>[\s\S]*?<\/Groups>/, '');
+    fs.writeFileSync(secondPath, secondXml);
+    dialogSelection = vscode.Uri.file(secondPath);
+    await commands.get('explorer.open')();
+    const secondProject = provider.getChildren()[0];
+    assert.strictEqual(secondProject.uvprjFile.path, secondPath,
+        'projects with omitted controls and groups should still load');
+    assert.deepStrictEqual(provider.getChildren(provider.getChildren(secondProject)[0]), [],
+        'a Keil target with no Groups element should show an empty group list');
+    await commands.get('project.createGroup')(provider.getChildren(secondProject)[0]);
+    assert.ok(provider.getChildren(provider.getChildren(secondProject)[0]).some((item) => item.label === 'Board & IO'),
+        'new group creation should work when the Groups element was absent');
+    const updatedCpp = JSON.parse(fs.readFileSync(cppPath, 'utf8'));
+    const configNames = updatedCpp.configurations.map((item) => item.name);
+    assert.ok(configNames.includes('Projects/Board/MDK-ARM/Project.uvprojx: Target 1'));
+    assert.ok(configNames.includes('Second.uvprojx: Target 1'));
+    assert.strictEqual(new Set(configNames).size, configNames.length,
+        'same-named targets in separate projects need separate IntelliSense configurations');
+
+    vscode.workspace.workspaceFolders = [];
+    await commands.get('project.build')();
+    assert.strictEqual(latestTerminalOptions.cwd, path.dirname(secondPath),
+        'without a VS Code workspace the Keil terminal must start in the project directory');
+    const targetsBeforeClose = secondProject.getTargets();
+    const pendingReload = secondProject.reload();
+    await commands.get('project.close')(secondProject);
+    await pendingReload;
+    assert.strictEqual(secondProject.getTargets(), targetsBeforeClose,
+        'an in-progress reload must not attach new targets after the project is closed');
+
+    const c51Path = path.join(testRoot, 'Legacy.uvproj');
+    fs.writeFileSync(c51Path, '<?xml version="1.0" encoding="UTF-8"?>' +
+        '<Project><Targets><Target><TargetName>C51 Target</TargetName>' +
+        '<TargetOption><Target51><C51/></Target51></TargetOption></Target></Targets></Project>');
+    dialogSelection = vscode.Uri.file(c51Path);
+    await commands.get('explorer.open')();
+    const c51Project = provider.getChildren()[0];
+    assert.strictEqual(c51Project.uvprjFile.path, c51Path,
+        'C51 projects with omitted controls and groups should still load');
+    await commands.get('project.createGroup')(provider.getChildren(c51Project)[0]);
+    assert.ok(provider.getChildren(provider.getChildren(c51Project)[0]).some((item) => item.label === 'Board & IO'));
+    await commands.get('project.close')(c51Project);
+    c51Project.close();
+    console.log('Smoke test passed: discovery, build cwd, IntelliSense isolation, partial save, atomic watcher, project editing, close/F7.');
     await require('./test_project_edit').run(extensionRoot);
 }
 

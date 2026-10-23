@@ -167,6 +167,36 @@ async function run(extensionRoot = path.resolve(__dirname, '..')) {
         fs.writeFileSync(legacyPath, initialXml, 'utf8');
         const legacyAdded = await addFileToKeilProject(legacyPath, 'Debug', 'Application', cPath);
         assert.strictEqual(legacyAdded.status, 'added', '.uvproj projects should also accept C files');
+
+        const attributedFilesPath = path.join(projectDir, 'AttributedFiles.uvprojx');
+        fs.writeFileSync(attributedFilesPath, initialXml.replace(
+            '<Group><GroupName>Headers</GroupName></Group>',
+            '<Group><GroupName>Headers</GroupName><Files marker="keep &amp; stay"/></Group>'
+        ), 'utf8');
+        assert.strictEqual((await addFileToKeilProject(attributedFilesPath, 'Debug', 'Headers', hPath)).status, 'added');
+        const attributedFilesXml = fs.readFileSync(attributedFilesPath, 'utf8');
+        assert.ok(attributedFilesXml.includes('<Files marker="keep &amp; stay">'),
+            'expanding a self-closing Files element must preserve its attributes');
+        const attributedFiles = getGroup(getTarget(await parseXml(attributedFilesXml), 'Debug'), 'Headers').Files;
+        assert.strictEqual(attributedFiles.$.marker, 'keep & stay');
+        assert.strictEqual(asArray(attributedFiles.File)[0].FileName, path.basename(hPath));
+
+        const attributedGroupsPath = path.join(projectDir, 'AttributedGroups.uvprojx');
+        fs.writeFileSync(attributedGroupsPath, [
+            '<?xml version="1.0" encoding="UTF-8"?>',
+            '<Project><Targets><Target><TargetName>Debug</TargetName>',
+            '<Groups marker="keep &amp; stay"/>',
+            '</Target></Targets></Project>'
+        ].join('\r\n'), 'utf8');
+        assert.strictEqual((await createGroupInKeilProject(attributedGroupsPath, 'Debug', 'New Group')).status,
+            'created');
+        const attributedGroupsXml = fs.readFileSync(attributedGroupsPath, 'utf8');
+        assert.ok(attributedGroupsXml.includes('<Groups marker="keep &amp; stay">'),
+            'expanding a self-closing Groups element must preserve its attributes');
+        const attributedTarget = getTarget(await parseXml(attributedGroupsXml), 'Debug');
+        assert.strictEqual(attributedTarget.Groups.$.marker, 'keep & stay');
+        assert.ok(getGroup(attributedTarget, 'New Group'));
+
         console.log('Project edit test passed: add/remove file, create group, no-op, stale references, target isolation, CRLF, XML, .uvproj.');
     } finally {
         const resolvedTestRoot = path.resolve(testRoot);

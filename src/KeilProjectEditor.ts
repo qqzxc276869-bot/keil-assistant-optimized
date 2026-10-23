@@ -136,6 +136,13 @@ function insertBeforeClose(xml: string, element: XmlElement, block: string, eol:
     return xml.slice(0, element.closeStart) + eol + block + eol + closingIndent + xml.slice(element.closeStart);
 }
 
+function expandSelfClosingElement(xml: string, element: XmlElement, block: string, eol: string,
+    closingIndent: string): string {
+    const opening = xml.slice(element.start, element.openEnd).replace(/\s*\/\s*>$/, '>');
+    const replacement = `${opening}${eol}${block}${eol}${closingIndent}</${element.name}>`;
+    return xml.slice(0, element.start) + replacement + xml.slice(element.end);
+}
+
 function projectPathKey(projectDir: string, reference: string): string {
     const normalized = reference.replace(/[\\/]/g, node_path.sep);
     const fullPath = node_path.resolve(projectDir, normalized);
@@ -259,8 +266,7 @@ export async function addFileToKeilProject(projectPath: string, targetName: stri
         const filesBlock = `${filesIndent}<Files>${eol}${fileBlock}${eol}${filesIndent}</Files>`;
         updated = insertBeforeClose(xml, groupElement, filesBlock, eol, groupIndent);
     } else if (filesElement.selfClosing) {
-        const replacement = `<Files>${eol}${fileBlock}${eol}${filesIndent}</Files>`;
-        updated = xml.slice(0, filesElement.start) + replacement + xml.slice(filesElement.end);
+        updated = expandSelfClosingElement(xml, filesElement, fileBlock, eol, filesIndent);
     } else {
         updated = insertBeforeClose(xml, filesElement, fileBlock, eol, filesIndent);
     }
@@ -320,8 +326,7 @@ export async function createGroupInKeilProject(projectPath: string, targetName: 
         const block = `${groupsIndent}<Groups>${eol}${groupBlock}${eol}${groupsIndent}</Groups>`;
         updated = insertBeforeClose(xml, target, block, eol, targetIndent);
     } else if (groupsElement.selfClosing) {
-        const replacement = `<Groups>${eol}${groupBlock}${eol}${groupsIndent}</Groups>`;
-        updated = xml.slice(0, groupsElement.start) + replacement + xml.slice(groupsElement.end);
+        updated = expandSelfClosingElement(xml, groupsElement, groupBlock, eol, groupsIndent);
     } else {
         updated = insertBeforeClose(xml, groupsElement, groupBlock, eol, groupsIndent);
     }

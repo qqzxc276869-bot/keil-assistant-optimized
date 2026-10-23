@@ -253,15 +253,21 @@ class KeilProject implements IView, KeilProjectInfo {
     vscodeDir: File;
     uvprjFile: File;
     logger: Console;
+    private logStream: fs.WriteStream;
 
     // uVison info
     uVsionFileInfo: uVisonInfo;
 
     private activeTargetName: string | undefined;
-    private prevUpdateTime: number | undefined;
+    private reloadTimer: NodeJS.Timeout | undefined;
+    private watcherRestartTimer: NodeJS.Timeout | undefined;
+    private watcherRestartAttempts = 0;
+    private reloadPromise: Promise<void> | undefined;
+    private reloadRequested = false;
+    private closed = false;
 
     protected _event: event.EventEmitter;
-    protected watcher: FileWatcher;
+    protected watcher: fs.FSWatcher | undefined;
     protected targetList: Target[];
 
     constructor(_uvprjFile: File) {
@@ -271,22 +277,14 @@ class KeilProject implements IView, KeilProjectInfo {
         this.vscodeDir = new File(_uvprjFile.dir + File.sep + '.vscode');
         this.vscodeDir.CreateDir();
         const logPath = this.vscodeDir.path + File.sep + 'keil-assistant.log';
-        this.logger = new console.Console(fs.createWriteStream(logPath, { flags: 'a+' }));
+        this.logStream = fs.createWriteStream(logPath, { flags: 'a+' });
+        this.logger = new console.Console(this.logStream);
         this.uvprjFile = _uvprjFile;
-        this.watcher = new FileWatcher(this.uvprjFile);
         this.prjID = getMD5(process.platform === 'win32' ? _uvprjFile.path.toLowerCase() : _uvprjFile.path);
         this.label = _uvprjFile.noSuffixName;
         this.tooltip = _uvprjFile.path;
         this.logger.log('[info] Log at : ' + Time.GetInstance().GetTimeStamp() + '\r\n');
-        this.watcher.OnChanged = () => {
-            if (this.prevUpdateTime === undefined ||
-                this.prevUpdateTime + 2000 < Date.now()) {
-                this.prevUpdateTime = Date.now(); // reset update time
-                setTimeout(() => this.onReload(), 300);
-            }
-        };
-        this.watcher.OnRename = this.watcher.OnChanged;
-        this.watcher.Watch();
+        this.watchProjectDirectory();
     }
 
     on(event: 'dataChanged', listener: () => void): void;
@@ -294,29 +292,86 @@ class KeilProject implements IView, KeilProjectInfo {
         this._event.on(event, listener);
     }
 
+    private watchProjectDirectory() {
+        if (this.closed) { return; }
+        // Watching the parent directory survives an atomic replacement of the project file.
+        const watcher = fs.watch(this.uvprjFile.dir, (_event, filename) => {
+            this.watcherRestartAttempts = 0;
+            if (!filename || filename.toString().toLowerCase() === this.uvprjFile.name.toLowerCase()) {
+                this.scheduleReload();
+            }
+        });
+        this.watcher = watcher;
+        watcher.on('error', (error) => {
+            if (this.watcher !== watcher) { return; }
+            this.logger.log(`[Warn] Keil project watcher failed: ${error.message}`);
+            watcher.close();
+            this.watcher = undefined;
+            this.scheduleWatcherRestart();
+        });
+    }
+
+    private scheduleWatcherRestart() {
+        if (this.closed || this.watcherRestartTimer || this.watcherRestartAttempts >= 5) { return; }
+        this.watcherRestartAttempts++;
+        this.watcherRestartTimer = setTimeout(() => {
+            this.watcherRestartTimer = undefined;
+            try { this.watchProjectDirectory(); }
+            catch (error) {
+                this.logger.log(`[Warn] Could not restart Keil project watcher: ${error.message}`);
+                this.scheduleWatcherRestart();
+            }
+        }, 1000);
+    }
+
+    private scheduleReload() {
+        if (this.closed) { return; }
+        if (this.reloadTimer) { clearTimeout(this.reloadTimer); }
+        this.reloadTimer = setTimeout(() => {
+            this.reloadTimer = undefined;
+            this.reload().catch((error) =>
+                vscode.window.showErrorMessage(`Reload Keil project failed: ${error.message}`));
+        }, 300);
+    }
+
     private async onReload() {
-        try {
-            this.targetList.forEach((target) => target.close());
-            this.targetList = [];
-            await this.load();
-            // An atomic project-file save replaces the watched file on Windows.
-            // Reattach the watcher so later changes are still detected.
-            this.watcher.Close();
-            this.watcher.Watch();
-            this.notifyUpdateView();
-        } catch (err) {
-            if (err.code && err.code === 'EBUSY') {
-                this.logger.log(`[Warn] uVision project file '${this.uvprjFile.name}' is locked !, delay 500 ms and retry !`);
-                setTimeout(() => this.onReload(), 500);
-            } else {
-                vscode.window.showErrorMessage(`reload project failed !, msg: ${err.message}`);
+        let lastError: Error | undefined;
+        for (let attempt = 0; attempt < 4 && !this.closed; attempt++) {
+            try {
+                await this.load();
+                this.notifyUpdateView();
+                return;
+            } catch (error) {
+                if (this.closed) { return; }
+                lastError = error;
+                if (attempt < 3) {
+                    await new Promise((resolve) => setTimeout(resolve, 500));
+                }
             }
         }
+        if (lastError) { throw lastError; }
     }
 
     async reload() {
-        this.prevUpdateTime = Date.now();
-        await this.onReload();
+        if (this.closed) { return; }
+        if (this.reloadTimer) {
+            clearTimeout(this.reloadTimer);
+            this.reloadTimer = undefined;
+        }
+        if (this.reloadPromise) {
+            this.reloadRequested = true;
+            return this.reloadPromise;
+        }
+        const task = this.onReload();
+        this.reloadPromise = task;
+        try { await task; }
+        finally {
+            this.reloadPromise = undefined;
+            if (this.reloadRequested && !this.closed) {
+                this.reloadRequested = false;
+                this.scheduleReload();
+            }
+        }
     }
 
     async load() {
@@ -328,18 +383,26 @@ class KeilProject implements IView, KeilProjectInfo {
         // init uVsion info
         this.uVsionFileInfo.schemaVersion = doc['Project']['SchemaVersion'];
 
-        if (Array.isArray(targets)) {
-            for (const target of targets) {
-                this.targetList.push(Target.getInstance(this, this.uVsionFileInfo, target));
+        const nextTargets: Target[] = [];
+        try {
+            for (const target of Array.isArray(targets) ? targets : [targets]) {
+                nextTargets.push(Target.getInstance(this, this.uVsionFileInfo, target));
             }
-        } else {
-            this.targetList.push(Target.getInstance(this, this.uVsionFileInfo, targets));
+            for (const target of nextTargets) {
+                await target.load();
+                target.on('dataChanged', () => this.notifyUpdateView());
+            }
+        } catch (error) {
+            nextTargets.forEach((target) => target.close());
+            throw error;
         }
-
-        for (const target of this.targetList) {
-            await target.load();
-            target.on('dataChanged', () => this.notifyUpdateView());
+        if (this.closed) {
+            nextTargets.forEach((target) => target.close());
+            throw new Error('The Keil project was closed while reloading.');
         }
+        const previousTargets = this.targetList;
+        this.targetList = nextTargets;
+        previousTargets.forEach((target) => target.close());
     }
 
     notifyUpdateView() {
@@ -347,17 +410,19 @@ class KeilProject implements IView, KeilProjectInfo {
     }
 
     close() {
-        this.watcher.Close();
+        if (this.closed) { return; }
+        this.closed = true;
+        if (this.reloadTimer) { clearTimeout(this.reloadTimer); }
+        if (this.watcherRestartTimer) { clearTimeout(this.watcherRestartTimer); }
+        this.watcher?.close();
         this.targetList.forEach((target) => target.close());
         this.logger.log('[info] project closed: ' + this.label);
+        this.logStream.end();
     }
 
     toAbsolutePath(rePath: string): string {
-        const path = rePath.replace(/\//g, File.sep);
-        if (/^[a-z]:/i.test(path)) {
-            return node_path.normalize(path);
-        }
-        return node_path.normalize(this.uvprjFile.dir + File.sep + path);
+        const path = rePath.replace(/[\\/]/g, File.sep);
+        return node_path.resolve(this.uvprjFile.dir, path);
     }
 
     active() {
@@ -457,7 +522,7 @@ abstract class Target implements IView {
         this.tooltip = this.targetName;
         const workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(prjInfo.uvprjFile.path));
         const projectPath = workspaceFolder ? node_path.relative(workspaceFolder.uri.fsPath, prjInfo.uvprjFile.path) : prjInfo.uvprjFile.name;
-        this.cppConfigName = node_path.dirname(projectPath) === '.' ? this.targetName : `${projectPath.replace(/\\/g, '/')}: ${this.targetName}`;
+        this.cppConfigName = `${projectPath.replace(/\\/g, '/')}: ${this.targetName}`;
         this.includes = new Set();
         this.defines = new Set();
         this.fGroups = [];
@@ -564,8 +629,8 @@ abstract class Target implements IView {
         const err = this.checkProject(this.targetDOM);
         if (err) { throw err; }
 
-        const incListStr: string = this.getIncString(this.targetDOM);
-        const defineListStr: string = this.getDefineString(this.targetDOM);
+        const incListStr: string = this.getIncString(this.targetDOM) || '';
+        const defineListStr: string = this.getDefineString(this.targetDOM) || '';
         const _groups: any = this.getGroups(this.targetDOM);
         const sysIncludes = this.getSystemIncludes(this.targetDOM);
 
@@ -720,7 +785,7 @@ abstract class Target implements IView {
             const isCmd = /cmd.exe$/i.test(vscode.env.shell);
             const quoteArg = (arg: string) => isCmd ? `"${arg.replace(/"/g, '""')}"` : `'${arg.replace(/'/g, "''")}'`;
             const commandLine = (isCmd ? '' : '& ') + [builderPath].concat(args).map(quoteArg).join(' ');
-            const terminal = vscode.window.createTerminal(name);
+            const terminal = vscode.window.createTerminal({ name, cwd: this.project.uvprjFile.dir });
             terminal.show();
             terminal.sendText(commandLine);
         }
@@ -847,16 +912,18 @@ class C51Target extends Target {
 
     protected getIncString(target: any): string {
         const target51 = target['TargetOption']['Target51']['C51'];
-        return target51['VariousControls']['IncludePath'];
+        const controls = target51['VariousControls'];
+        return controls ? controls['IncludePath'] : '';
     }
 
     protected getDefineString(target: any): string {
         const target51 = target['TargetOption']['Target51']['C51'];
-        return target51['VariousControls']['Define'];
+        const controls = target51['VariousControls'];
+        return controls ? controls['Define'] : '';
     }
 
     protected getGroups(target: any): any[] {
-        return target['Groups']['Group'] || [];
+        return (target['Groups'] && target['Groups']['Group']) || [];
     }
 
     protected getProblemMatcher(): string[] {
@@ -1175,16 +1242,18 @@ class ArmTarget extends Target {
 
     protected getIncString(target: any): string {
         const dat = target['TargetOption']['TargetArmAds']['Cads'];
-        return dat['VariousControls']['IncludePath'];
+        const controls = dat['VariousControls'];
+        return controls ? controls['IncludePath'] : '';
     }
 
     protected getDefineString(target: any): string {
         const dat = target['TargetOption']['TargetArmAds']['Cads'];
-        return dat['VariousControls']['Define'];
+        const controls = dat['VariousControls'];
+        return controls ? controls['Define'] : '';
     }
 
     protected getGroups(target: any): any[] {
-        return target['Groups']['Group'] || [];
+        return (target['Groups'] && target['Groups']['Group']) || [];
     }
 
     protected getProblemMatcher(): string[] {
