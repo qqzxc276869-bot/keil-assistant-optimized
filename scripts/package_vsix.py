@@ -1,6 +1,8 @@
 """Package the locally built Keil Assistant without a registry download."""
 
 import json
+import shutil
+import subprocess
 from pathlib import Path
 from xml.sax.saxutils import escape
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -10,17 +12,43 @@ ROOT = Path(__file__).resolve().parent.parent
 PACKAGE = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
 OUTPUT = ROOT / f"keil-assistant-{PACKAGE['version']}-optimized.vsix"
 
+# Never leave a same-version package that predates the current source tree.
+if OUTPUT.is_file():
+    OUTPUT.unlink()
+
+npm = shutil.which("npm")
+if npm is None:
+    raise SystemExit("npm is required to check and build the extension before packaging")
+for script in ("check", "build"):
+    subprocess.run([npm, "run", script], cwd=ROOT, check=True)
+
 FILES = [
     ROOT / name
     for name in ("package.json", "README.md", "README_EN.md", "CHANGELOG.md", "LICENSE")
 ]
 for directory in ("bin", "dist", "res", "syntaxes"):
     FILES.extend(path for path in (ROOT / directory).rglob("*") if path.is_file())
-for dependency in ("xml2js", "sax", "xmlbuilder"):
-    package_dir = ROOT / "node_modules" / dependency
+
+lockfile = json.loads((ROOT / "package-lock.json").read_text(encoding="utf-8"))
+installed_packages = lockfile.get("packages")
+if not isinstance(installed_packages, dict):
+    raise SystemExit("package-lock.json must contain a packages map")
+for dependency in PACKAGE.get("dependencies", {}):
+    if f"node_modules/{dependency}" not in installed_packages:
+        raise SystemExit(f"Runtime dependency missing from package-lock.json: {dependency}")
+for package_path, metadata in installed_packages.items():
+    if not package_path.startswith("node_modules/") or metadata.get("dev"):
+        continue
+    package_dir = ROOT / package_path
+    if (ROOT / "node_modules").resolve() not in package_dir.resolve().parents:
+        raise SystemExit(f"Invalid runtime dependency path: {package_path}")
     if not package_dir.is_dir():
+        if metadata.get("optional"):
+            continue
         raise SystemExit(f"Missing runtime dependency: {package_dir}")
     FILES.extend(path for path in package_dir.rglob("*") if path.is_file())
+
+FILES = sorted(set(FILES))
 
 MAIN = ROOT / PACKAGE["main"]
 if not MAIN.is_file():
@@ -52,17 +80,39 @@ manifest = f'''<?xml version="1.0" encoding="utf-8"?>
   </Assets>
 </PackageManifest>'''
 
-content_types = '''<?xml version="1.0" encoding="utf-8"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="json" ContentType="application/json" />
-  <Default Extension="js" ContentType="application/javascript" />
-  <Default Extension="md" ContentType="text/markdown" />
-  <Default Extension="txt" ContentType="text/plain" />
-  <Default Extension="svg" ContentType="image/svg+xml" />
-  <Default Extension="png" ContentType="image/png" />
-  <Default Extension="exe" ContentType="application/octet-stream" />
-  <Override PartName="/extension.vsixmanifest" ContentType="text/xml" />
-</Types>'''
+known_content_types = {
+    "exe": "application/octet-stream",
+    "js": "application/javascript",
+    "json": "application/json",
+    "map": "application/json",
+    "md": "text/markdown",
+    "png": "image/png",
+    "svg": "image/svg+xml",
+    "ts": "text/plain",
+    "txt": "text/plain",
+}
+extensions = sorted({file.suffix.lstrip(".").lower() for file in FILES if file.suffix})
+extensionless = sorted(file for file in FILES if not file.suffix)
+content_type_lines = [
+    '<?xml version="1.0" encoding="utf-8"?>',
+    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">',
+]
+for extension in extensions:
+    content_type_lines.append(
+        f'  <Default Extension="{escape(extension)}" '
+        f'ContentType="{known_content_types.get(extension, "application/octet-stream")}" />'
+    )
+for file in extensionless:
+    name = "extension/" + file.relative_to(ROOT).as_posix()
+    content_type_lines.append(
+        f'  <Override PartName="/{escape(name)}" ContentType="text/plain" />'
+    )
+content_type_lines.extend((
+    '  <Override PartName="/extension/LICENSE.txt" ContentType="text/plain" />',
+    '  <Override PartName="/extension.vsixmanifest" ContentType="text/xml" />',
+    '</Types>',
+))
+content_types = "\n".join(content_type_lines)
 
 with ZipFile(OUTPUT, "w", ZIP_DEFLATED) as archive:
     archive.writestr("[Content_Types].xml", content_types)

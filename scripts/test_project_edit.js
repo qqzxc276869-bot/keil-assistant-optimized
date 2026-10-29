@@ -28,7 +28,8 @@ function getFiles(group) {
 }
 
 async function run(extensionRoot = path.resolve(__dirname, '..')) {
-    const { addFileToKeilProject, createGroupInKeilProject, removeFileFromKeilProject } =
+    const { addFileToKeilProject, createGroupInKeilProject, removeFileFromKeilProject,
+        addIncludeDirectoryToKeilProject } =
         require(path.join(extensionRoot, 'dist', 'src', 'KeilProjectEditor'));
     const scratchParent = path.resolve(__dirname, '..');
     const testRoot = fs.mkdtempSync(path.join(scratchParent, '.keil-assistant-project-edit-'));
@@ -197,7 +198,126 @@ async function run(extensionRoot = path.resolve(__dirname, '..')) {
         assert.strictEqual(attributedTarget.Groups.$.marker, 'keep & stay');
         assert.ok(getGroup(attributedTarget, 'New Group'));
 
-        console.log('Project edit test passed: add/remove file, create group, no-op, stale references, target isolation, CRLF, XML, .uvproj.');
+        const includeDir = path.dirname(hPath);
+        const newIncludeDir = path.join(sourceDir, 'Inc & More');
+        fs.mkdirSync(newIncludeDir);
+        const existingInclude = path.relative(projectDir, includeDir).replace(/\\/g, '/');
+        const storedNewInclude = path.relative(projectDir, newIncludeDir).replace(/\//g, '\\');
+        const includeProjectPath = path.join(projectDir, 'IncludePaths.uvprojx');
+        const includeXml = [
+            '<?xml version="1.0" encoding="UTF-8"?>',
+            '<Project>',
+            '  <Targets>',
+            '    <Target>',
+            '      <TargetName>Debug</TargetName>',
+            '      <TargetOption><TargetArmAds><Cads><VariousControls>',
+            `        <IncludePath>${existingInclude}</IncludePath>`,
+            '      </VariousControls></Cads></TargetArmAds></TargetOption>',
+            '    </Target>',
+            '    <Target>',
+            '      <TargetName>Release</TargetName>',
+            '      <TargetOption><TargetArmAds><Cads><VariousControls><IncludePath>Release\\Inc</IncludePath></VariousControls></Cads></TargetArmAds></TargetOption>',
+            '    </Target>',
+            '  </Targets>',
+            '</Project>',
+            ''
+        ].join('\r\n');
+        fs.writeFileSync(includeProjectPath, includeXml, 'utf8');
+        assert.deepStrictEqual(await addIncludeDirectoryToKeilProject(includeProjectPath, 'Debug', includeDir),
+            { status: 'already-present' }, 'mixed path separators should be deduplicated');
+        assert.strictEqual(fs.readFileSync(includeProjectPath, 'utf8'), includeXml,
+            'an existing include directory should leave the project byte-for-byte unchanged');
+        assert.deepStrictEqual(await addIncludeDirectoryToKeilProject(includeProjectPath, 'Debug', newIncludeDir),
+            { status: 'created' });
+        const updatedIncludeXml = fs.readFileSync(includeProjectPath, 'utf8');
+        assert.ok(!/(^|[^\r])\n/.test(updatedIncludeXml), 'include path changes should preserve CRLF');
+        assert.ok(updatedIncludeXml.includes('Inc &amp; More'), 'include paths must be XML escaped');
+        const releaseIncludeSection = /<Target>\s*<TargetName>Release<\/TargetName>[\s\S]*?<\/Target>/.exec(includeXml)[0];
+        assert.ok(updatedIncludeXml.includes(releaseIncludeSection), 'other target XML should remain unchanged');
+        const includeParsed = await parseXml(updatedIncludeXml);
+        const debugInclude = getTarget(includeParsed, 'Debug').TargetOption.TargetArmAds.Cads.VariousControls.IncludePath;
+        assert.deepStrictEqual(debugInclude.split(';'), [existingInclude, storedNewInclude]);
+        assert.strictEqual(getTarget(includeParsed, 'Release').TargetOption.TargetArmAds.Cads.VariousControls.IncludePath,
+            'Release\\Inc', 'other target include paths should remain unchanged');
+
+        const missingIncludePath = path.join(projectDir, 'MissingInclude.uvprojx');
+        fs.writeFileSync(missingIncludePath, includeXml.replace(
+            `<IncludePath>${existingInclude}</IncludePath>`, '<Define>BOARD</Define>'), 'utf8');
+        assert.strictEqual((await addIncludeDirectoryToKeilProject(missingIncludePath, 'Debug', newIncludeDir)).status,
+            'created', 'missing IncludePath should be created');
+        const missingIncludeParsed = await parseXml(fs.readFileSync(missingIncludePath, 'utf8'));
+        assert.strictEqual(getTarget(missingIncludeParsed, 'Debug').TargetOption.TargetArmAds.Cads.VariousControls.IncludePath,
+            storedNewInclude);
+        assert.strictEqual(getTarget(missingIncludeParsed, 'Debug').TargetOption.TargetArmAds.Cads.VariousControls.Define,
+            'BOARD', 'neighboring compiler options should remain intact');
+
+        const missingControlsPath = path.join(projectDir, 'MissingControls.uvprojx');
+        fs.writeFileSync(missingControlsPath, includeXml.replace(
+            `<VariousControls>\r\n        <IncludePath>${existingInclude}</IncludePath>\r\n      </VariousControls>`,
+            '<Optimization>2</Optimization>'), 'utf8');
+        assert.strictEqual((await addIncludeDirectoryToKeilProject(missingControlsPath, 'Debug', newIncludeDir)).status,
+            'created', 'missing VariousControls should be created');
+        const missingControlsParsed = await parseXml(fs.readFileSync(missingControlsPath, 'utf8'));
+        const missingControlsCads = getTarget(missingControlsParsed, 'Debug').TargetOption.TargetArmAds.Cads;
+        assert.strictEqual(missingControlsCads.VariousControls.IncludePath, storedNewInclude);
+        assert.strictEqual(missingControlsCads.Optimization, '2');
+
+        const selfClosingPath = path.join(projectDir, 'SelfClosingIncludes.uvprojx');
+        fs.writeFileSync(selfClosingPath, includeXml.replace(
+            `<IncludePath>${existingInclude}</IncludePath>`, '<IncludePath marker="keep &amp; stay"/>'), 'utf8');
+        assert.strictEqual((await addIncludeDirectoryToKeilProject(selfClosingPath, 'Debug', newIncludeDir)).status,
+            'created');
+        const selfClosingXml = fs.readFileSync(selfClosingPath, 'utf8');
+        assert.ok(selfClosingXml.includes(`<IncludePath marker="keep &amp; stay">${storedNewInclude.replace(/&/g, '&amp;')}</IncludePath>`),
+            'expanding a self-closing IncludePath should preserve attributes');
+        const selfClosingParsed = await parseXml(selfClosingXml);
+        assert.strictEqual(getTarget(selfClosingParsed, 'Debug').TargetOption.TargetArmAds.Cads.VariousControls.IncludePath.$.marker,
+            'keep & stay');
+
+        const selfClosingControlsPath = path.join(projectDir, 'SelfClosingControls.uvprojx');
+        fs.writeFileSync(selfClosingControlsPath, includeXml.replace(
+            `<VariousControls>\r\n        <IncludePath>${existingInclude}</IncludePath>\r\n      </VariousControls>`,
+            '<VariousControls marker="keep &amp; stay"/>'), 'utf8');
+        assert.strictEqual((await addIncludeDirectoryToKeilProject(selfClosingControlsPath, 'Debug', newIncludeDir)).status,
+            'created');
+        const selfClosingControls = getTarget(await parseXml(fs.readFileSync(selfClosingControlsPath, 'utf8')),
+            'Debug').TargetOption.TargetArmAds.Cads.VariousControls;
+        assert.strictEqual(selfClosingControls.$.marker, 'keep & stay');
+        assert.strictEqual(selfClosingControls.IncludePath, storedNewInclude);
+
+        const c51ProjectPath = path.join(projectDir, 'C51.uvproj');
+        const c51Xml = includeXml.replace(/TargetArmAds/g, 'Target51').replace(/Cads/g, 'C51');
+        fs.writeFileSync(c51ProjectPath, c51Xml, 'utf8');
+        assert.strictEqual((await addIncludeDirectoryToKeilProject(c51ProjectPath, 'Debug', newIncludeDir)).status,
+            'created', 'C51 projects should use Target51/C51/VariousControls');
+        const c51Parsed = await parseXml(fs.readFileSync(c51ProjectPath, 'utf8'));
+        assert.deepStrictEqual(getTarget(c51Parsed, 'Debug').TargetOption.Target51.C51.VariousControls.IncludePath.split(';'),
+            [existingInclude, storedNewInclude]);
+
+        const projectDirIncludePath = path.join(projectDir, 'ProjectDirInclude.uvprojx');
+        fs.writeFileSync(projectDirIncludePath, includeXml.replace(
+            `<IncludePath>${existingInclude}</IncludePath>`, '<IncludePath/>'), 'utf8');
+        assert.strictEqual((await addIncludeDirectoryToKeilProject(projectDirIncludePath, 'Debug', projectDir)).status,
+            'created', 'the project directory should be represented as a dot');
+        assert.strictEqual(getTarget(await parseXml(fs.readFileSync(projectDirIncludePath, 'utf8')),
+            'Debug').TargetOption.TargetArmAds.Cads.VariousControls.IncludePath, '.');
+
+        const bomProjectPath = path.join(projectDir, 'BomIncludes.uvprojx');
+        fs.writeFileSync(bomProjectPath, '\uFEFF' + includeXml, 'utf8');
+        assert.strictEqual((await addIncludeDirectoryToKeilProject(bomProjectPath, 'Debug', newIncludeDir)).status,
+            'created');
+        assert.ok(fs.readFileSync(bomProjectPath, 'utf8').startsWith('\uFEFF'),
+            'the original UTF-8 BOM should be preserved');
+
+        const beforeInvalidInclude = fs.readFileSync(includeProjectPath, 'utf8');
+        await assert.rejects(() => addIncludeDirectoryToKeilProject(includeProjectPath, 'Debug',
+            path.join(testRoot, 'missing-directory')));
+        assert.strictEqual(fs.readFileSync(includeProjectPath, 'utf8'), beforeInvalidInclude,
+            'invalid include directories should not edit the project');
+        await assert.rejects(() => addIncludeDirectoryToKeilProject(projectPath, 'Debug', newIncludeDir),
+            /compiler options/, 'a target without Keil C compiler options should be rejected');
+
+        console.log('Project edit test passed: add/remove file, create group/include paths, no-op, stale references, target isolation, CRLF, XML, .uvproj.');
     } finally {
         const resolvedTestRoot = path.resolve(testRoot);
         if (path.dirname(resolvedTestRoot) === scratchParent &&

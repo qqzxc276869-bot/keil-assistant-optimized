@@ -391,3 +391,127 @@ export async function removeFileFromKeilProject(projectPath: string, targetName:
     writeProjectChange(projectPath, buffer, updated);
     return { status: 'removed' };
 }
+
+function includePathText(value: any): string {
+    if (typeof value === 'string') { return value; }
+    if (value && typeof value === 'object' && (value._ === undefined || typeof value._ === 'string')) {
+        return value._ || '';
+    }
+    if (value === undefined) { return ''; }
+    throw new Error('The selected Keil include path has unsupported XML content.');
+}
+
+/** Add an existing directory to one target's compiler include paths. Other targets are untouched. */
+export async function addIncludeDirectoryToKeilProject(projectPath: string, targetName: string,
+    includeDir: string): Promise<ProjectEditResult> {
+    const absoluteDir = node_path.resolve(includeDir);
+    if (!fs.statSync(absoluteDir).isDirectory()) {
+        throw new Error(`The include path is not a directory: ${includeDir}`);
+    }
+    const projectDir = node_path.dirname(projectPath);
+    const storedPath = node_path.relative(projectDir, absoluteDir).replace(/\//g, '\\') || '.';
+    if (/[;\u0000-\u001f]/.test(storedPath)) {
+        throw new Error('The include directory cannot be represented in a Keil include path list.');
+    }
+
+    const { buffer, xml } = readUtf8Project(projectPath);
+    const parser = new xml2js.Parser({ explicitArray: false });
+    const document = await parser.parseStringPromise(xml);
+    const targets = asArray<any>(document.Project && document.Project.Targets && document.Project.Targets.Target);
+    const matchingTargets = targets.map((target, index) => target.TargetName === targetName ? index : -1)
+        .filter((index) => index >= 0);
+    if (matchingTargets.length !== 1) {
+        throw new Error(`Keil target is missing or ambiguous: ${targetName}`);
+    }
+    const targetIndex = matchingTargets[0];
+    const targetData = targets[targetIndex];
+    const optionData = targetData.TargetOption;
+    const armCads = optionData && optionData.TargetArmAds && optionData.TargetArmAds.Cads;
+    const c51Cads = optionData && optionData.Target51 && optionData.Target51.C51;
+    if ((armCads === undefined) === (c51Cads === undefined)) {
+        throw new Error('The selected Keil target has no unambiguous C compiler options.');
+    }
+    const isArm = armCads !== undefined;
+    const cadsData = isArm ? armCads : c51Cads;
+    const variousData = cadsData && cadsData.VariousControls;
+    const includeData = variousData && variousData.IncludePath;
+    const currentPath = includePathText(includeData);
+    const desiredKey = projectPathKey(projectDir, absoluteDir);
+    if (currentPath.split(';').some((entry) => entry.trim() &&
+        projectPathKey(projectDir, entry.trim()) === desiredKey)) {
+        return { status: 'already-present' };
+    }
+
+    const target = targetElement(xml, targets.length, targetIndex);
+    const option = one(target, 'TargetOption');
+    const compiler = one(option, isArm ? 'TargetArmAds' : 'Target51');
+    const cads = one(compiler, isArm ? 'Cads' : 'C51');
+    const variousElements = direct(cads, 'VariousControls');
+    if (variousElements.length > 1) {
+        throw new Error('The selected Keil compiler contains multiple <VariousControls> elements.');
+    }
+    const various = variousElements[0];
+    const includeElements = various ? direct(various, 'IncludePath') : [];
+    if (includeElements.length > 1) {
+        throw new Error('The selected Keil target contains multiple <IncludePath> elements.');
+    }
+    const includeElement = includeElements[0];
+    const eol = xml.includes('\r\n') ? '\r\n' : '\n';
+    const escapedPath = xmlEscape(storedPath);
+    let updated: string;
+    if (includeElement) {
+        if (includeElement.children.length) {
+            throw new Error('The selected Keil include path has unsupported XML content.');
+        }
+        if (includeElement.selfClosing) {
+            const opening = xml.slice(includeElement.start, includeElement.openEnd).replace(/\s*\/\s*>$/, '>');
+            updated = xml.slice(0, includeElement.start) + `${opening}${escapedPath}</IncludePath>` +
+                xml.slice(includeElement.end);
+        } else {
+            const content = xml.slice(includeElement.openEnd, includeElement.closeStart);
+            if (content.includes('<')) {
+                throw new Error('The selected Keil include path has unsupported XML content.');
+            }
+            const trailing = /[ \t\r\n]*$/.exec(content)![0];
+            const body = content.slice(0, content.length - trailing.length);
+            const separator = body && !body.endsWith(';') ? ';' : '';
+            updated = xml.slice(0, includeElement.openEnd) + body + separator + escapedPath + trailing +
+                xml.slice(includeElement.closeStart);
+        }
+    } else if (various) {
+        const variousIndent = lineIndent(xml, various.start) || '';
+        const child = various.children[0];
+        const unit = indentUnit(xml, various, child);
+        const includeIndent = child ? (lineIndent(xml, child.start) || variousIndent + unit) : variousIndent + unit;
+        const block = `${includeIndent}<IncludePath>${escapedPath}</IncludePath>`;
+        updated = various.selfClosing
+            ? expandSelfClosingElement(xml, various, block, eol, variousIndent)
+            : insertBeforeClose(xml, various, block, eol, variousIndent);
+    } else {
+        const cadsIndent = lineIndent(xml, cads.start) || '';
+        const child = cads.children[0];
+        const unit = indentUnit(xml, cads, child);
+        const variousIndent = child ? (lineIndent(xml, child.start) || cadsIndent + unit) : cadsIndent + unit;
+        const includeIndent = variousIndent + unit;
+        const block = `${variousIndent}<VariousControls>${eol}` +
+            `${includeIndent}<IncludePath>${escapedPath}</IncludePath>${eol}` +
+            `${variousIndent}</VariousControls>`;
+        updated = cads.selfClosing
+            ? expandSelfClosingElement(xml, cads, block, eol, cadsIndent)
+            : insertBeforeClose(xml, cads, block, eol, cadsIndent);
+    }
+
+    const after = await parser.parseStringPromise(updated);
+    const afterTargets = asArray<any>(after.Project.Targets.Target);
+    const afterOptions = afterTargets[targetIndex].TargetOption;
+    const afterCads = isArm ? afterOptions.TargetArmAds.Cads : afterOptions.Target51.C51;
+    const afterPath = includePathText(afterCads.VariousControls.IncludePath);
+    if (afterTargets.length !== targets.length ||
+        afterTargets[targetIndex].TargetName !== targetName ||
+        afterPath.split(';').filter((entry) => entry.trim() &&
+            projectPathKey(projectDir, entry.trim()) === desiredKey).length !== 1) {
+        throw new Error('The changed Keil include path could not be verified; the project was not saved.');
+    }
+    writeProjectChange(projectPath, buffer, updated);
+    return { status: 'created' };
+}

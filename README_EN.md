@@ -9,15 +9,15 @@ The original workflow required creating groups and adding files in Keil, then sa
 | Area | Improvements |
 | --- | --- |
 | Project discovery | Recursively find nested `.uvproj` / `.uvprojx` files, choose among projects by path, remember manually opened projects, and keep the outer source workspace open. |
-| Builds | Save edited VS Code files before build or rebuild, run `UV4.exe` from the project directory, validate its path, and handle `F7` after closing a project. |
-| Project management | Create Keil groups, add existing `.c` / `.h` files to a chosen target and group, and remove project references without deleting disk files. |
-| Editor configuration | Place C/C++ IntelliSense settings in the workspace containing the project. |
+| Builds | Save edited VS Code files before build or rebuild, run `UV4.exe` from the project directory, validate its path, and prevent overlapping tasks for one project. |
+| Project management | Create Keil groups, add existing `.c` / `.h` files to a chosen target and group, remove project references without deleting disk files, and add header directories to the chosen target's IncludePath. |
+| Editor configuration | Place C/C++ IntelliSense settings in the workspace containing the project while preserving JSONC comments and user configurations. |
 
-Builds and downloads still use the locally installed Keil tools. Adding a `.h` file does not automatically configure the include search path; update the Keil project settings when needed.
+Builds and downloads still use the locally installed Keil tools. Groups and file references can be managed in VS Code.
 
 ## Install this modified build
 
-Download the `.vsix` from this repository's [Releases](https://github.com/qqzxc276869-bot/keil-assistant-optimized/releases), then run **Extensions: Install from VSIX...** in VS Code. This build's extension ID is `qqzxc276869-bot.keil-assistant-optimized`. If the original `cl.keil-assistant` is installed, disable it first to avoid two extensions handling the same shortcuts and project view.
+Download the `.vsix` from this repository's [Releases](https://github.com/qqzxc276869-bot/keil-assistant-optimized/releases), then run **Extensions: Install from VSIX...** in VS Code 1.40 or newer. This build's extension ID is `qqzxc276869-bot.keil-assistant-optimized`. If the original `cl.keil-assistant` is installed, disable it first to avoid two extensions handling the same shortcuts and project view.
 
 To build from source, install Node.js and Python, run `npm ci`, `npm run check`, and `npm test`, then run `python scripts/package_vsix.py` to produce a VSIX.
 
@@ -40,13 +40,13 @@ Keil Assistant displays Keil C51/ARM projects in VS Code and uses Keil uVision t
 
 ## Common operations
 
-- **Build, rebuild, download**: Use the buttons in the project view. `F7` builds the active target; `Ctrl+Alt+F7` rebuilds it. Unsaved VS Code files are saved before a build. The Keil build output is the authority for compilation results.
+- **Build, rebuild, download**: Use the buttons in the project view. `F7` builds the active target; `Ctrl+Alt+F7` rebuilds it. Unsaved VS Code files are saved before a build. Attempting another task for the same project while one is running shows a warning. The Keil build output is the authority for compilation results.
 
   ![build](./res/preview/build.png)
 
-- **Add a new file to a Keil project from VS Code**: After creating a `.c` or `.h` file, right-click it in the VS Code Explorer and select **Add File to Keil Project**. You can also open the file and run the same command from the Command Palette. Select the loaded Keil project, target, and group; the extension updates the project file without opening Keil. A `.c` file participates in the selected target's build. A `.h` file appears in the project group, but adding it does not configure the `#include` search path; set the header directory in the project when needed.
+- **Add a new file to a Keil project from VS Code**: After creating and saving a `.c` or `.h` file, right-click it in the VS Code Explorer and select **Add File to Keil Project**. You can also open the file and run the same command from the Command Palette. Select the loaded Keil project, target, and group; the extension updates the project file without opening Keil. A `.c` file participates in the selected target's build. When adding a `.h` file, the extension also adds its directory to that target's Keil `IncludePath`, without duplicating an existing path.
 
-- **Manage the Keil project tree directly**: Right-click a project or target in the extension's project tree and choose **New Keil Group** to create a group. Right-click a group and choose **Add File to Keil Group** to select an existing `.c` or `.h` file from disk. Right-click a file in a group and choose **Remove File from Keil Project** to remove its reference from that target's project group while keeping the disk file. **Delete** in VS Code's built-in Explorer is a separate action that deletes the disk file.
+- **Manage the Keil project tree directly**: Right-click a project or target in the extension's project tree and choose **New Keil Group** to create a group. Right-click a group and choose **Add File to Keil Group** to select an existing `.c` or `.h` file from disk. Right-click a file in a group and choose **Remove File from Keil Project** to remove its reference from that target's project group while keeping the disk file. These commands also work from the Command Palette and prompt for the missing project, group, or file. **Delete** in VS Code's built-in Explorer is a separate action that deletes the disk file.
 
 - **Refresh after changing the project in Keil**: After adding or removing source files or editing include paths in Keil, click **Save All** there. The project view refreshes when the extension detects the project file change.
 
@@ -66,7 +66,7 @@ Keil Assistant displays Keil C51/ARM projects in VS Code and uses Keil uVision t
 
 ## VS Code diagnostics and Keil builds
 
-The extension generates `.vscode/c_cpp_properties.json` at the active workspace root so the editor can read the project's include paths and defines. Red squiggles come from IntelliSense and do not by themselves mean the Keil build failed. Check the Keil build output first; if it succeeds, inspect the selected C/C++ configuration, device defines, and include paths.
+The extension generates `.vscode/c_cpp_properties.json` in the workspace containing the project so the editor can read its include paths and defines. Updates preserve JSONC comments, other configurations, and existing formatting. Red squiggles come from IntelliSense and do not by themselves mean the Keil build failed. Check the Keil build output first; if it succeeds, inspect the selected C/C++ configuration, device defines, and include paths.
 
 ## Other settings
 

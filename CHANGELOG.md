@@ -2,6 +2,16 @@
 
 All notable changes to the "keil-assistant" extension will be documented in this file.
 
+## [v1.7.8] Project editing and build workflow
+- Add a header's directory to the selected Target's Keil IncludePath when adding an existing `.h` file from VS Code or the Keil project tree
+- Let project, group, and file commands invoked from the Command Palette prompt for the missing selection instead of failing or silently doing nothing
+- Prevent overlapping build, rebuild, and download tasks that share a project build log; report completion when no workspace is open
+- Preserve comments, trailing commas, BOM, and unrelated settings in `c_cpp_properties.json`; write configurations once per project load and skip unchanged files
+- Use one build-log watcher per project and cache unchanged dependency files; obtain ARMClang macros without blocking the extension host, with a timeout and retry after failure
+- Require VS Code 1.40 or later, show `.C`/`.H` Explorer actions, and rebuild with runtime dependencies and source maps before packaging the VSIX
+
+***
+
 ## [v1.7.7] Reliability and packaging review
 - Preserve the loaded project tree when a Keil project save is temporarily incomplete, and continue watching after atomic file replacement
 - Fix UNC source paths, the build directory when no VS Code workspace is open, and IntelliSense configuration collisions between projects with the same target name

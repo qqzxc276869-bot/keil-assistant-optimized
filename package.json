@@ -2,7 +2,7 @@
     "name": "keil-assistant-optimized",
     "displayName": "Keil Assistant (Optimized)",
     "description": "Manage and build Keil uVision projects from VS Code",
-    "version": "1.7.7",
+    "version": "1.7.8",
     "publisher": "qqzxc276869-bot",
     "author": {
         "name": "Goal",
@@ -17,7 +17,7 @@
     ],
     "homepage": "https://github.com/qqzxc276869-bot/keil-assistant-optimized",
     "engines": {
-        "vscode": "^1.38.0"
+        "vscode": "^1.40.0"
     },
     "categories": [
         "Programming Languages",
@@ -173,17 +173,23 @@
             }
         ],
         "menus": {
+            "commandPalette": [
+                {
+                    "command": "item.copyValue",
+                    "when": "false"
+                }
+            ],
             "explorer/context": [
                 {
                     "command": "project.addFile",
-                    "when": "resourceExtname == .c || resourceExtname == .h",
+                    "when": "resourceExtname == .c || resourceExtname == .h || resourceExtname == .C || resourceExtname == .H",
                     "group": "navigation@10"
                 }
             ],
             "editor/context": [
                 {
                     "command": "project.addFile",
-                    "when": "resourceExtname == .c || resourceExtname == .h",
+                    "when": "resourceExtname == .c || resourceExtname == .h || resourceExtname == .C || resourceExtname == .H",
                     "group": "navigation@10"
                 }
             ],
@@ -351,19 +357,20 @@
         ]
     },
     "scripts": {
-        "vscode:prepublish": "npm run build",
+        "vscode:prepublish": "npm run check && npm run build",
         "build": "node scripts/build.js",
         "check": "node scripts/check.js",
         "pretest": "npm run build",
-        "test": "node scripts/smoke.js"
+        "test": "node scripts/smoke.js && node scripts/test_cpp_config.js"
     },
     "devDependencies": {
         "@types/node": "^12.11.7",
-        "@types/vscode": "1.38.0",
+        "@types/vscode": "1.40.0",
         "@types/xml2js": "^0.4.5",
         "typescript": "^3.6.4"
     },
     "dependencies": {
+        "jsonc-parser": "^3.3.1",
         "xml2js": "^0.6.2"
     }
 }

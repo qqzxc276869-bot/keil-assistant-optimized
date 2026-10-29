@@ -8,10 +8,10 @@ import * as child_process from 'child_process';
 
 import { File } from '../lib/node_utility/File';
 import { ResourceManager } from './ResourceManager';
-import { FileWatcher } from '../lib/node_utility/FileWatcher';
 import { Time } from '../lib/node_utility/Time';
-import { CmdLineHandler } from './CmdLineHandler';
-import { addFileToKeilProject, createGroupInKeilProject, removeFileFromKeilProject } from './KeilProjectEditor';
+import { addFileToKeilProject, addIncludeDirectoryToKeilProject, createGroupInKeilProject,
+    removeFileFromKeilProject } from './KeilProjectEditor';
+import { CppConfiguration, updateCppConfigurationsFile } from './CppConfigWriter';
 
 export function activate(context: vscode.ExtensionContext) {
 
@@ -50,11 +50,11 @@ export function activate(context: vscode.ExtensionContext) {
     subscriber.push(vscode.commands.registerCommand('explorer.discover', () => prjExplorer.loadWorkspace(true)));
 
     subscriber.push(vscode.commands.registerCommand('project.addFile', (uri?: vscode.Uri) => prjExplorer.addFileFromVSCode(uri)));
-    subscriber.push(vscode.commands.registerCommand('project.addFileToGroup', (item: FileGroup) => prjExplorer.addFileToGroup(item)));
+    subscriber.push(vscode.commands.registerCommand('project.addFileToGroup', (item?: FileGroup) => prjExplorer.addFileToGroup(item)));
     subscriber.push(vscode.commands.registerCommand('project.createGroup', (item?: IView) => prjExplorer.createGroup(item)));
-    subscriber.push(vscode.commands.registerCommand('project.removeFile', (item: Source) => prjExplorer.removeFile(item)));
+    subscriber.push(vscode.commands.registerCommand('project.removeFile', (item?: Source) => prjExplorer.removeFile(item)));
 
-    subscriber.push(vscode.commands.registerCommand('project.close', (item: IView) => prjExplorer.closeProject(item.prjID)));
+    subscriber.push(vscode.commands.registerCommand('project.close', (item?: IView) => prjExplorer.closeProjectFromCommand(item)));
 
     subscriber.push(vscode.commands.registerCommand('project.build', async (item: IView) => {
         if (await vscode.workspace.saveAll()) {
@@ -70,11 +70,17 @@ export function activate(context: vscode.ExtensionContext) {
 
     subscriber.push(vscode.commands.registerCommand('project.download', (item: IView) => prjExplorer.getTarget(item)?.download()));
 
-    subscriber.push(vscode.commands.registerCommand('item.copyValue', (item: IView) => vscode.env.clipboard.writeText(item.tooltip || '')));
+    subscriber.push(vscode.commands.registerCommand('item.copyValue', (item?: IView) => {
+        if (item?.tooltip === undefined) {
+            vscode.window.showInformationMessage('Use Copy Value from a Keil project tree item.');
+            return;
+        }
+        return vscode.env.clipboard.writeText(item.tooltip);
+    }));
 
-    subscriber.push(vscode.commands.registerCommand('project.switch', (item: IView) => prjExplorer.switchTargetByProject(item)));
+    subscriber.push(vscode.commands.registerCommand('project.switch', (item?: IView) => prjExplorer.switchTargetByProject(item)));
     
-    subscriber.push(vscode.commands.registerCommand('project.active', (item: IView) => prjExplorer.activeProject(item)));
+    subscriber.push(vscode.commands.registerCommand('project.active', (item?: IView) => prjExplorer.activeProject(item)));
 
     prjExplorer.loadWorkspace();
 }
@@ -98,6 +104,16 @@ function expandProjectLocation(location: string, folders: readonly vscode.Worksp
             return folder ? folder.uri.fsPath : '';
         })
         .replace(/\$\{env:([^}]+)\}/g, (_match, name: string) => process.env[name] || '');
+}
+
+function readXmlText(value: any): string {
+    if (value === undefined || value === null) { return ''; }
+    if (typeof value === 'string') { return value; }
+    if (typeof value === 'object' && !Array.isArray(value) &&
+        (value._ === undefined || typeof value._ === 'string')) {
+        return value._ || '';
+    }
+    throw new Error('The Keil project contains unsupported compiler option text.');
 }
 
 //===============================
@@ -239,6 +255,8 @@ interface uVisonInfo {
 
 class KeilProject implements IView, KeilProjectInfo {
 
+    private static warnedCppConfigs: Set<string> = new Set();
+
     prjID: string;
     label: string;
     tooltip?: string | undefined;
@@ -265,6 +283,10 @@ class KeilProject implements IView, KeilProjectInfo {
     private reloadPromise: Promise<void> | undefined;
     private reloadRequested = false;
     private closed = false;
+    private buildLogWatcher: fs.FSWatcher | undefined;
+    private buildWatcherRestartTimer: NodeJS.Timeout | undefined;
+    private buildWatcherRestartAttempts = 0;
+    private sourceRefreshTimer: NodeJS.Timeout | undefined;
 
     protected _event: event.EventEmitter;
     protected watcher: fs.FSWatcher | undefined;
@@ -285,6 +307,9 @@ class KeilProject implements IView, KeilProjectInfo {
         this.tooltip = _uvprjFile.path;
         this.logger.log('[info] Log at : ' + Time.GetInstance().GetTimeStamp() + '\r\n');
         this.watchProjectDirectory();
+        const logLock = new File(node_path.join(this.vscodeDir.path, 'uv4.log.lock'));
+        if (!logLock.IsFile()) { logLock.Write(''); }
+        this.watchBuildLogDirectory();
     }
 
     on(event: 'dataChanged', listener: () => void): void;
@@ -322,6 +347,47 @@ class KeilProject implements IView, KeilProjectInfo {
                 this.scheduleWatcherRestart();
             }
         }, 1000);
+    }
+
+    private watchBuildLogDirectory() {
+        if (this.closed) { return; }
+        const watcher = fs.watch(this.vscodeDir.path, (_event, filename) => {
+            this.buildWatcherRestartAttempts = 0;
+            if (!filename || filename.toString().toLowerCase() === 'uv4.log.lock') {
+                this.scheduleSourceRefresh();
+            }
+        });
+        this.buildLogWatcher = watcher;
+        watcher.on('error', (error) => {
+            if (this.buildLogWatcher !== watcher) { return; }
+            this.logger.log(`[Warn] Keil build log watcher failed: ${error.message}`);
+            watcher.close();
+            this.buildLogWatcher = undefined;
+            this.scheduleBuildWatcherRestart();
+        });
+    }
+
+    private scheduleBuildWatcherRestart() {
+        if (this.closed || this.buildWatcherRestartTimer || this.buildWatcherRestartAttempts >= 5) { return; }
+        this.buildWatcherRestartAttempts++;
+        this.buildWatcherRestartTimer = setTimeout(() => {
+            this.buildWatcherRestartTimer = undefined;
+            try { this.watchBuildLogDirectory(); }
+            catch (error) {
+                this.logger.log(`[Warn] Could not restart Keil build log watcher: ${error.message}`);
+                this.scheduleBuildWatcherRestart();
+            }
+        }, 1000);
+    }
+
+    private scheduleSourceRefresh() {
+        if (this.closed) { return; }
+        if (this.sourceRefreshTimer) { clearTimeout(this.sourceRefreshTimer); }
+        this.sourceRefreshTimer = setTimeout(() => {
+            this.sourceRefreshTimer = undefined;
+            this.targetList.filter((target) => target.hasLoadedSourceRefs())
+                .forEach((target) => target.updateSourceRefs());
+        }, 150);
     }
 
     private scheduleReload() {
@@ -400,13 +466,30 @@ class KeilProject implements IView, KeilProjectInfo {
             nextTargets.forEach((target) => target.close());
             throw new Error('The Keil project was closed while reloading.');
         }
+        this.updateCppProperties(nextTargets);
         const previousTargets = this.targetList;
         this.targetList = nextTargets;
         previousTargets.forEach((target) => target.close());
+        this.getActiveTarget()?.updateSourceRefs(false);
     }
 
     notifyUpdateView() {
         this._event.emit('dataChanged');
+    }
+
+    private updateCppProperties(targets: Target[]) {
+        const workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(this.uvprjFile.path));
+        const configDir = workspaceFolder ? workspaceFolder.uri.fsPath : this.uvprjFile.dir;
+        const configPath = node_path.join(configDir, '.vscode', 'c_cpp_properties.json');
+        try {
+            updateCppConfigurationsFile(configPath, targets.map((target) => target.getCppConfiguration()));
+        } catch (error) {
+            this.logger.log(error);
+            if (!KeilProject.warnedCppConfigs.has(configPath)) {
+                KeilProject.warnedCppConfigs.add(configPath);
+                vscode.window.showWarningMessage(`Keil Assistant could not update ${configPath}. Check its JSON format; the existing file was kept.`);
+            }
+        }
     }
 
     close() {
@@ -414,7 +497,10 @@ class KeilProject implements IView, KeilProjectInfo {
         this.closed = true;
         if (this.reloadTimer) { clearTimeout(this.reloadTimer); }
         if (this.watcherRestartTimer) { clearTimeout(this.watcherRestartTimer); }
+        if (this.buildWatcherRestartTimer) { clearTimeout(this.buildWatcherRestartTimer); }
+        if (this.sourceRefreshTimer) { clearTimeout(this.sourceRefreshTimer); }
         this.watcher?.close();
+        this.buildLogWatcher?.close();
         this.targetList.forEach((target) => target.close());
         this.logger.log('[info] project closed: ' + this.label);
         this.logStream.end();
@@ -443,6 +529,7 @@ class KeilProject implements IView, KeilProjectInfo {
     setActiveTarget(tName: string) {
         if (tName !== this.activeTargetName) {
             this.activeTargetName = tName;
+            this.getActiveTarget()?.updateSourceRefs(false);
             this.notifyUpdateView(); // notify data changed
         }
     }
@@ -484,7 +571,8 @@ class KeilProject implements IView, KeilProjectInfo {
 
 abstract class Target implements IView {
 
-    private static warnedCppConfigs: Set<string> = new Set();
+    private static runningTasks: Map<string, string> = new Map();
+    private static processOutput: vscode.OutputChannel | undefined;
 
     prjID: string;
     label: string;
@@ -509,7 +597,9 @@ abstract class Target implements IView {
     protected defines: Set<string>;
 
     private uv4LogFile: File;
-    private uv4LogLockFileWatcher: FileWatcher;
+    private sourceRefStamps = new Map<Source, { mtimeMs: number; ctimeMs: number; size: number }>();
+    private sourceRefsLoaded = false;
+    private closed = false;
 
     constructor(prjInfo: KeilProjectInfo, uvInfo: uVisonInfo, targetDOM: any) {
         this._event = new event.EventEmitter();
@@ -527,24 +617,6 @@ abstract class Target implements IView {
         this.defines = new Set();
         this.fGroups = [];
         this.uv4LogFile = new File(this.project.vscodeDir.path + File.sep + 'uv4.log');
-        this.uv4LogLockFileWatcher = new FileWatcher(new File(this.uv4LogFile.path + '.lock'));
-
-        if (!this.uv4LogLockFileWatcher.file.IsFile()) { // create file if not existed
-            this.uv4LogLockFileWatcher.file.Write('');
-        }
-
-        this.uv4LogLockFileWatcher.Watch();
-        this.uv4LogLockFileWatcher.OnChanged = () => this.updateSourceRefs();
-        this.uv4LogLockFileWatcher.on('error', () => {
-
-            this.uv4LogLockFileWatcher.Close();
-
-            if (!this.uv4LogLockFileWatcher.file.IsFile()) { // create file if not existed
-                this.uv4LogLockFileWatcher.file.Write('');
-            }
-
-            this.uv4LogLockFileWatcher.Watch();
-        });
     }
 
     on(event: 'dataChanged', listener: () => void): void;
@@ -560,67 +632,13 @@ abstract class Target implements IView {
         }
     }
 
-    private getDefCppProperties(): any {
+    getCppConfiguration(): CppConfiguration {
         return {
-            configurations: [
-                {
-                    name: this.cppConfigName,
-                    includePath: undefined,
-                    defines: undefined,
-                    intelliSenseMode: '${default}'
-                }
-            ],
-            version: 4
+            name: this.cppConfigName,
+            includePath: Array.from(this.includes).concat(['${default}']),
+            defines: Array.from(this.defines),
+            intelliSenseMode: '${default}'
         };
-    }
-
-    private updateCppProperties() {
-
-        const workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(this.project.uvprjFile.path));
-        const configDir = new File(node_path.join(workspaceFolder ? workspaceFolder.uri.fsPath : this.project.uvprjFile.dir, '.vscode'));
-        configDir.CreateDir();
-        const proFile = new File(node_path.join(configDir.path, 'c_cpp_properties.json'));
-        let obj: any;
-
-        if (proFile.IsFile()) {
-            try {
-                obj = JSON.parse(proFile.Read());
-            } catch (error) {
-                this.project.logger.log(error);
-                this.warnCppConfig(proFile.path);
-                return;
-            }
-        } else {
-            obj = this.getDefCppProperties();
-        }
-
-        const configList: any[] = obj['configurations'];
-        if (!Array.isArray(configList)) {
-            this.warnCppConfig(proFile.path);
-            return;
-        }
-        const index = configList.findIndex((conf) => { return conf.name === this.cppConfigName; });
-
-        if (index === -1) {
-            configList.push({
-                name: this.cppConfigName,
-                includePath: Array.from(this.includes).concat(['${default}']),
-                defines: Array.from(this.defines),
-                intelliSenseMode: '${default}'
-            });
-        } else {
-            configList[index]['includePath'] = Array.from(this.includes).concat(['${default}']);
-            configList[index]['defines'] = Array.from(this.defines);
-        }
-
-        proFile.Write(JSON.stringify(obj, undefined, 4));
-    }
-
-    private warnCppConfig(path: string) {
-        if (!Target.warnedCppConfigs.has(path)) {
-            Target.warnedCppConfigs.add(path);
-            vscode.window.showWarningMessage(`Keil Assistant could not update ${path}. Check its JSON format; the existing file was kept.`);
-        }
     }
 
     async load(): Promise<void> {
@@ -731,9 +749,6 @@ abstract class Target implements IView {
                 this.fGroups.push(nGrp);
         }
 
-        this.updateCppProperties();
-
-        this.updateSourceRefs();
     }
 
     private runTask(name: string, commands: string[]) {
@@ -752,42 +767,84 @@ abstract class Target implements IView {
         }
 
         const args = ['-o', this.uv4LogFile.path].concat(commands);
+        // Targets in the same directory share uv4.log and may share build outputs.
+        const logPath = node_path.resolve(this.uv4LogFile.path);
+        const taskKey = process.platform === 'win32' ? logPath.toLowerCase() : logPath;
+        const running = Target.runningTasks.get(taskKey);
+        if (running) {
+            vscode.window.showWarningMessage(`Keil ${running} is still running for ${this.project.uvprjFile.dir}. Wait for it to finish before starting ${name}.`);
+            return;
+        }
+        Target.runningTasks.set(taskKey, name);
+        let released = false;
+        const release = () => {
+            if (released) { return; }
+            released = true;
+            Target.runningTasks.delete(taskKey);
+        };
 
         // use task
         if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
-
-            const workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(this.project.uvprjFile.path));
-            const task = new vscode.Task({ type: 'keil-task' }, workspaceFolder || vscode.TaskScope.Global,
-                `${name}: ${this.project.uvprjFile.name} / ${this.targetName}`, 'Keil Assistant');
-            task.execution = new vscode.ProcessExecution(builderPath, args, { cwd: this.project.uvprjFile.dir });
-            task.isBackground = false;
-            task.problemMatchers = this.getProblemMatcher();
-            task.presentationOptions = {
-                echo: false,
-                focus: false,
-                clear: true
-            };
-            vscode.tasks.executeTask(task).then(undefined, (error) => {
-                vscode.window.showErrorMessage(`Keil ${name} failed to start: ${error.message}`);
-            });
-
-        } else {
-
-            const index = vscode.window.terminals.findIndex((ter) => {
-                return ter.name === name;
-            });
-
-            if (index !== -1) {
-                vscode.window.terminals[index].hide();
-                vscode.window.terminals[index].dispose();
+            let endSubscription: vscode.Disposable | undefined;
+            try {
+                const workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(this.project.uvprjFile.path));
+                const runId = crypto.randomBytes(8).toString('hex');
+                const task = new vscode.Task({ type: 'keil-task', runId }, workspaceFolder || vscode.TaskScope.Global,
+                    `${name}: ${this.project.uvprjFile.name} / ${this.targetName}`, 'Keil Assistant');
+                task.execution = new vscode.ProcessExecution(builderPath, args, { cwd: this.project.uvprjFile.dir });
+                task.isBackground = false;
+                task.problemMatchers = this.getProblemMatcher();
+                task.presentationOptions = {
+                    echo: false,
+                    focus: false,
+                    clear: true
+                };
+                endSubscription = vscode.tasks.onDidEndTask((event) => {
+                    if (event.execution.task.definition.runId !== runId) { return; }
+                    if (endSubscription) { endSubscription.dispose(); }
+                    release();
+                    this.updateSourceRefs();
+                });
+                vscode.tasks.executeTask(task).then(undefined, (error) => {
+                    if (endSubscription) { endSubscription.dispose(); }
+                    release();
+                    vscode.window.showErrorMessage(`Keil ${name} failed to start: ${error.message}`);
+                });
+            } catch (error) {
+                if (endSubscription) { endSubscription.dispose(); }
+                release();
+                vscode.window.showErrorMessage(`Keil ${name} failed to start: ${(<Error>error).message}`);
             }
 
-            const isCmd = /cmd.exe$/i.test(vscode.env.shell);
-            const quoteArg = (arg: string) => isCmd ? `"${arg.replace(/"/g, '""')}"` : `'${arg.replace(/'/g, "''")}'`;
-            const commandLine = (isCmd ? '' : '& ') + [builderPath].concat(args).map(quoteArg).join(' ');
-            const terminal = vscode.window.createTerminal({ name, cwd: this.project.uvprjFile.dir });
-            terminal.show();
-            terminal.sendText(commandLine);
+        } else {
+            // VS Code 1.40 cannot report completion of a command in an
+            // interactive terminal, so use a process with a real exit event.
+            try {
+                const output = Target.processOutput ||
+                    (Target.processOutput = vscode.window.createOutputChannel('Keil Assistant'));
+                output.appendLine(`${name}: ${this.project.uvprjFile.name} / ${this.targetName}`);
+                output.show(true);
+                const processHandle = child_process.spawn(builderPath, args, {
+                    cwd: this.project.uvprjFile.dir,
+                    windowsHide: true
+                });
+                processHandle.stdout?.on('data', (chunk) => output.append(chunk.toString()));
+                processHandle.stderr?.on('data', (chunk) => output.append(chunk.toString()));
+                processHandle.on('error', (error) => {
+                    release();
+                    output.appendLine(`Keil ${name} failed to start: ${error.message}`);
+                    vscode.window.showErrorMessage(`Keil ${name} failed to start: ${error.message}`);
+                });
+                processHandle.on('close', (code, signal) => {
+                    release();
+                    output.appendLine(`Keil ${name} exited with code ${code === null ? 'unknown' : code}${signal ? ` (signal ${signal})` : ''}.`);
+                    this.updateSourceRefs();
+                });
+            } catch (error) {
+                release();
+                Target.processOutput?.appendLine(`Keil ${name} failed to start: ${(<Error>error).message}`);
+                vscode.window.showErrorMessage(`Keil ${name} failed to start: ${(<Error>error).message}`);
+            }
         }
     }
 
@@ -803,30 +860,55 @@ abstract class Target implements IView {
         this.runTask('download', this.getDownloadCommand());
     }
 
-    updateSourceRefs() {
+    hasLoadedSourceRefs(): boolean {
+        return this.sourceRefsLoaded;
+    }
+
+    updateSourceRefs(notify: boolean = true, selectedGroup?: FileGroup) {
+        if (this.closed) { return; }
         const rePath = this.getOutputFolder(this.targetDOM);
         if (rePath) {
+            this.sourceRefsLoaded = true;
+            let changed = false;
             const outPath = this.project.toAbsolutePath(rePath);
-            this.fGroups.forEach((group) => {
+            (selectedGroup ? [selectedGroup] : this.fGroups).forEach((group) => {
                 group.sources.forEach((source) => {
                     if (source.enable) { // if source not disabled
                         const refFile = File.fromArray([outPath, source.file.noSuffixName + '.d']);
-                        if (refFile.IsFile()) {
+                        let stat: fs.Stats | undefined;
+                        try { stat = fs.statSync(refFile.path); }
+                        catch (error) { /* The dependency file may not exist yet. */ }
+                        if (!stat || !stat.isFile()) {
+                            if (this.sourceRefStamps.delete(source)) {
+                                source.children = undefined;
+                                changed = true;
+                            }
+                            return;
+                        }
+                        const stamp = this.sourceRefStamps.get(source);
+                        if (stamp && stamp.mtimeMs === stat.mtimeMs && stamp.ctimeMs === stat.ctimeMs &&
+                            stamp.size === stat.size) { return; }
+                        try {
                             const refFileList = this.parseRefLines(this.targetDOM, refFile.Read().split(/\r\n|\n/))
-                                .map((rePath) => { return this.project.toAbsolutePath(rePath); });
-                            source.children = refFileList.map((refFilePath) => {
-                                return new Source(source.prjID, new File(refFilePath));
+                                .map((dependency) => this.project.toAbsolutePath(dependency));
+                            source.children = refFileList.map((refFilePath) => new Source(source.prjID, new File(refFilePath)));
+                            this.sourceRefStamps.set(source, {
+                                mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, size: stat.size
                             });
+                            changed = true;
+                        } catch (error) {
+                            this.project.logger.log(`[Warn] Could not read ${refFile.path}: ${(<Error>error).message}`);
                         }
                     }
                 });
             });
-            this._event.emit('dataChanged');
+            if (notify && changed) { this._event.emit('dataChanged'); }
         }
     }
 
     close() {
-        this.uv4LogLockFileWatcher.Close();
+        this.closed = true;
+        this.sourceRefStamps.clear();
     }
 
     getChildViews(): IView[] | undefined {
@@ -913,13 +995,13 @@ class C51Target extends Target {
     protected getIncString(target: any): string {
         const target51 = target['TargetOption']['Target51']['C51'];
         const controls = target51['VariousControls'];
-        return controls ? controls['IncludePath'] : '';
+        return readXmlText(controls && controls['IncludePath']);
     }
 
     protected getDefineString(target: any): string {
         const target51 = target['TargetOption']['Target51']['C51'];
         const controls = target51['VariousControls'];
-        return controls ? controls['Define'] : '';
+        return readXmlText(controls && controls['Define']);
     }
 
     protected getGroups(target: any): any[] {
@@ -1115,13 +1197,15 @@ class ArmTarget extends Target {
         '__builtin_arm_stlex(x,y)=0U'
     ];
 
-    private static armclangBuildinMacros: string[] | undefined;
+    private static armclangMacroCache = new Map<string, string[]>();
+    private static armclangMacroRequests = new Map<string, Promise<void>>();
+    private static armclangFallback = ['__GNUC__=4', '__GNUC_MINOR__=2', '__GNUC_PATCHLEVEL__=1'];
 
-    constructor(prjInfo: KeilProjectInfo, uvInfo: uVisonInfo, targetDOM: any) {
-        super(prjInfo, uvInfo, targetDOM);
-        if (targetDOM['uAC6'] === '1') {
-            ArmTarget.initArmclangMacros();
+    async load(): Promise<void> {
+        if (this.targetDOM['uAC6'] === '1') {
+            await ArmTarget.initArmclangMacros(this.armclangPath());
         }
+        await super.load();
     }
 
     protected checkProject(): Error | undefined {
@@ -1187,43 +1271,54 @@ class ArmTarget extends Target {
         }
     }
 
-    private static initArmclangMacros() {
-        if (ArmTarget.armclangBuildinMacros === undefined) {
-            const armClangPath = node_path.dirname(node_path.dirname(ResourceManager.getInstance().getArmUV4Path()))
-                + File.sep + 'ARM' + File.sep + 'ARMCLANG' + File.sep + 'bin' + File.sep + 'armclang.exe';
-            ArmTarget.armclangBuildinMacros = ArmTarget.getArmClangMacroList(armClangPath);
-        }
+    private armclangPath(): string {
+        return node_path.join(node_path.dirname(node_path.dirname(ResourceManager.getInstance().getArmUV4Path())),
+            'ARM', 'ARMCLANG', 'bin', 'armclang.exe');
+    }
+
+    private static initArmclangMacros(path: string): Promise<void> {
+        const cached = ArmTarget.armclangMacroCache.get(path);
+        if (cached) { return Promise.resolve(); }
+        const pending = ArmTarget.armclangMacroRequests.get(path);
+        if (pending) { return pending; }
+        const request = ArmTarget.getArmClangMacroList(path).then((macros) => {
+            if (macros) { ArmTarget.armclangMacroCache.set(path, macros); }
+        }).catch(() => {
+            // Keep static macros and retry when the project loads again.
+        }).then(() => {
+            ArmTarget.armclangMacroRequests.delete(path);
+        });
+        ArmTarget.armclangMacroRequests.set(path, request);
+        return request;
     }
 
     protected getSysDefines(target: any): string[] {
         if (target['uAC6'] === '1') { // ARMClang
-            return ArmTarget.armclangMacros.concat(ArmTarget.armclangBuildinMacros || []);
+            return ArmTarget.armclangMacros.concat(
+                ArmTarget.armclangMacroCache.get(this.armclangPath()) || ArmTarget.armclangFallback);
         } else { // ARMCC
             return ArmTarget.armccMacros;
         }
     }
 
-    private static getArmClangMacroList(armClangPath: string): string[] {
-        try {
-            const cmdLine = CmdLineHandler.quoteString(armClangPath, '"')
-                + ' ' + ['--target=arm-arm-none-eabi', '-E', '-dM', '-', '<nul'].join(' ');
-
-            const lines = child_process.execSync(cmdLine).toString().split(/\r\n|\n/);
-            const resList: string[] = [];
-            const mHandler = new MacroHandler();
-
-            lines.filter((line) => { return line.trim() !== ''; })
-                .forEach((line) => {
-                    const value = mHandler.toExpression(line);
-                    if (value) {
-                        resList.push(value);
-                    }
+    private static getArmClangMacroList(armClangPath: string): Promise<string[] | undefined> {
+        if (!new File(armClangPath).IsFile()) { return Promise.resolve(undefined); }
+        return new Promise((resolve) => {
+            const child = child_process.execFile(armClangPath,
+                ['--target=arm-arm-none-eabi', '-E', '-dM', '-'],
+                { timeout: 5000, maxBuffer: 2 * 1024 * 1024 },
+                (error, stdout) => {
+                    if (error) { resolve(undefined); return; }
+                    try {
+                        const mHandler = new MacroHandler();
+                        const macros = stdout.split(/\r\n|\n/)
+                            .map((line) => mHandler.toExpression(line))
+                            .filter((value): value is string => !!value);
+                        resolve(macros.length ? macros : undefined);
+                    } catch (error) { resolve(undefined); }
                 });
-
-            return resList;
-        } catch (error) {
-            return ['__GNUC__=4', '__GNUC_MINOR__=2', '__GNUC_PATCHLEVEL__=1'];
-        }
+            if (child.stdin) { child.stdin.end(); }
+        });
     }
 
     protected getSystemIncludes(target: any): string[] | undefined {
@@ -1243,13 +1338,13 @@ class ArmTarget extends Target {
     protected getIncString(target: any): string {
         const dat = target['TargetOption']['TargetArmAds']['Cads'];
         const controls = dat['VariousControls'];
-        return controls ? controls['IncludePath'] : '';
+        return readXmlText(controls && controls['IncludePath']);
     }
 
     protected getDefineString(target: any): string {
         const dat = target['TargetOption']['TargetArmAds']['Cads'];
         const controls = dat['VariousControls'];
-        return controls ? controls['Define'] : '';
+        return readXmlText(controls && controls['Define']);
     }
 
     protected getGroups(target: any): any[] {
@@ -1456,8 +1551,33 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
         }
     }
 
-    async activeProject(view: IView) {
-        const project = this.prjList.get(view.prjID);
+    private async chooseProject(view?: IView): Promise<KeilProject | undefined> {
+        if (view) {
+            const project = this.prjList.get(view.prjID);
+            if (!project) { vscode.window.showWarningMessage('The selected Keil project is no longer open.'); }
+            return project;
+        }
+        const projects = Array.from(this.prjList.values());
+        if (projects.length === 0) {
+            vscode.window.showWarningMessage('Open a Keil project first.');
+            return undefined;
+        }
+        if (projects.length === 1) { return projects[0]; }
+        const selected = await vscode.window.showQuickPick(projects.map((project) => ({
+            label: project.label,
+            description: project.uvprjFile.path,
+            project
+        })), { placeHolder: 'Select a Keil project' });
+        return selected?.project;
+    }
+
+    async closeProjectFromCommand(view?: IView) {
+        const project = await this.chooseProject(view);
+        if (project) { await this.closeProject(project.prjID); }
+    }
+
+    async activeProject(view?: IView) {
+        const project = await this.chooseProject(view);
         if (project) {
             this.currentActiveProject?.deactive();
             this.currentActiveProject = project;
@@ -1466,10 +1586,14 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
         }
     }
 
-    async switchTargetByProject(view: IView) {
-        const prj = this.prjList.get(view.prjID);
+    async switchTargetByProject(view?: IView) {
+        const prj = await this.chooseProject(view);
         if (prj) {
             const tList = prj.getTargets();
+            if (tList.length === 0) {
+                vscode.window.showWarningMessage(`No Keil targets were found in ${prj.label}.`);
+                return;
+            }
             const targetName = await vscode.window.showQuickPick(tList.map((ele) => { return ele.targetName; }), {
                 canPickMany: false,
                 placeHolder: 'please select a target name for keil project'
@@ -1482,7 +1606,7 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
 
     async createGroup(view?: IView) {
         try {
-            const project = view ? this.prjList.get(view.prjID) : this.currentActiveProject;
+            const project = await this.chooseProject(view);
             const target = view?.contextVal === 'Target' ? project?.getTargetByName(view.label) : project?.getActiveTarget();
             if (!project || !target) {
                 vscode.window.showWarningMessage('Open a Keil project and select a target first.');
@@ -1511,10 +1635,37 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
         }
     }
 
-    async removeFile(item: Source) {
-        if (!(item instanceof Source) || !item.targetName || !item.groupName) { return; }
+    async removeFile(item?: Source) {
+        if (!(item instanceof Source)) {
+            const choices = Array.from(this.prjList.values()).reduce<Array<{ label: string; description: string; source: Source }>>(
+                (list, project) => {
+                    project.getTargets().forEach((target) => target.getFileGroups().forEach((group) =>
+                        group.sources.forEach((source) => list.push({
+                            label: source.label,
+                            description: `${project.label} / ${target.targetName} / ${group.label} — ${source.file.path}`,
+                            source
+                        }))));
+                    return list;
+                }, []);
+            if (choices.length === 0) {
+                vscode.window.showWarningMessage('No files are listed in an open Keil project.');
+                return;
+            }
+            const selected = await vscode.window.showQuickPick(choices, {
+                placeHolder: 'Select a Keil project file to remove (the disk file will be kept)'
+            });
+            item = selected?.source;
+        }
+        if (!item) { return; }
+        if (!item.targetName || !item.groupName) {
+            vscode.window.showWarningMessage('Select a file listed directly in a Keil group.');
+            return;
+        }
         const project = this.prjList.get(item.prjID);
-        if (!project) { return; }
+        if (!project) {
+            vscode.window.showWarningMessage('The selected Keil project is no longer open.');
+            return;
+        }
         try {
             if (!await vscode.workspace.saveAll()) { return; }
             const result = await removeFileFromKeilProject(project.uvprjFile.path,
@@ -1530,12 +1681,60 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
         }
     }
 
-    async addFileToGroup(item: FileGroup) {
-        if (!(item instanceof FileGroup)) { return; }
+    private async addSelectedFile(project: KeilProject, target: Target, group: FileGroup, sourcePath: string) {
+        if (!await vscode.workspace.saveAll()) { return; }
+        const result = await addFileToKeilProject(project.uvprjFile.path, target.targetName, group.label, sourcePath);
+        let includeChanged = false;
+        let includeError: Error | undefined;
+        if (/\.h$/i.test(sourcePath)) {
+            try {
+                const includeResult = await addIncludeDirectoryToKeilProject(project.uvprjFile.path,
+                    target.targetName, node_path.dirname(sourcePath));
+                includeChanged = includeResult.status === 'created';
+            } catch (error) {
+                includeError = <Error>error;
+            }
+        }
+        if (result.status === 'added' || includeChanged) { await project.reload(); }
+        const fileName = node_path.basename(sourcePath);
+        if (includeError) {
+            vscode.window.showWarningMessage(`${fileName} is in ${target.targetName} / ${result.groupName}, but its header directory could not be added to IncludePath: ${includeError.message}`);
+        } else if (result.status === 'already-present') {
+            vscode.window.showInformationMessage(`${fileName} is already in ${target.targetName} / ${result.groupName}${includeChanged ? '; its header directory was added to IncludePath' : ''}.`);
+        } else {
+            vscode.window.showInformationMessage(`Added ${fileName} to ${target.targetName} / ${group.label}${includeChanged ? ' and its directory to IncludePath' : ''}.`);
+        }
+    }
+
+    async addFileToGroup(item?: FileGroup) {
+        if (!(item instanceof FileGroup)) {
+            const choices = Array.from(this.prjList.values()).reduce<Array<{ label: string; description: string; group: FileGroup }>>(
+                (list, project) => {
+                    project.getTargets().forEach((target) => target.getFileGroups().forEach((group) => list.push({
+                        label: group.label,
+                        description: `${project.label} / ${target.targetName}${group.excludedFromBuild ? ' — excluded from build' : ''}`,
+                        group
+                    })));
+                    return list;
+                }, []);
+            if (choices.length === 0) {
+                vscode.window.showWarningMessage('No Keil groups are available. Create a group first.');
+                return;
+            }
+            const selected = await vscode.window.showQuickPick(choices, {
+                placeHolder: 'Select the Keil group to add a file to'
+            });
+            item = selected?.group;
+        }
+        if (!item) { return; }
         const project = this.prjList.get(item.prjID);
         const target = project?.getTargetByName(item.targetName);
-        const group = target?.getFileGroups().find((candidate) => candidate.label === item.label);
-        if (!project || !target || !group) { return; }
+        const groupName = item.label;
+        const group = target?.getFileGroups().find((candidate) => candidate.label === groupName);
+        if (!project || !target || !group) {
+            vscode.window.showWarningMessage('The selected Keil group is no longer available.');
+            return;
+        }
         try {
             const selected = await vscode.window.showOpenDialog({
                 openLabel: `Add to ${item.label}`,
@@ -1553,14 +1752,7 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
                 vscode.window.showWarningMessage('This Keil group is excluded from build. Choose a build-enabled group for the .c file.');
                 return;
             }
-            if (!await vscode.workspace.saveAll()) { return; }
-            const result = await addFileToKeilProject(project.uvprjFile.path, target.targetName, group.label, sourcePath);
-            if (result.status === 'already-present') {
-                vscode.window.showInformationMessage(`${node_path.basename(sourcePath)} is already in ${target.targetName} / ${result.groupName}.`);
-            } else {
-                await project.reload();
-                vscode.window.showInformationMessage(`Added ${node_path.basename(sourcePath)} to ${target.targetName} / ${group.label}.`);
-            }
+            await this.addSelectedFile(project, target, group, sourcePath);
         } catch (error) {
             vscode.window.showErrorMessage(`Could not add the file to the Keil group: ${(<Error>error).message}`);
         }
@@ -1643,15 +1835,7 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
                 group = selected?.group;
             }
             if (!group) { return; }
-            if (!await vscode.workspace.saveAll()) { return; }
-
-            const result = await addFileToKeilProject(project.uvprjFile.path, target.targetName, group.label, sourcePath);
-            if (result.status === 'already-present') {
-                vscode.window.showInformationMessage(`${node_path.basename(sourcePath)} is already in ${target.targetName} / ${result.groupName}.`);
-            } else {
-                await project.reload();
-                vscode.window.showInformationMessage(`Added ${node_path.basename(sourcePath)} to ${target.targetName} / ${group.label}.`);
-            }
+            await this.addSelectedFile(project, target, group, sourcePath);
         } catch (error) {
             vscode.window.showErrorMessage(`Could not add the file to the Keil project: ${(<Error>error).message}`);
         }
@@ -1661,17 +1845,22 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
         if (view) {
             const prj = this.prjList.get(view.prjID);
             if (prj) {
-                const targets = prj.getTargets();
-                const index = targets.findIndex((target) => { return target.targetName === view.label; });
-                if (index !== -1) {
-                    return targets[index];
-                }
+                const targetName = view.contextVal === 'Target' ? view.label :
+                    view instanceof FileGroup ? view.targetName :
+                    view instanceof Source ? view.targetName : undefined;
+                const target = targetName ? prj.getTargetByName(targetName) : prj.getActiveTarget();
+                if (target) { return target; }
+                vscode.window.showWarningMessage(`No Keil target is available in ${prj.label}.`);
+            } else {
+                vscode.window.showWarningMessage('The selected Keil project is no longer open.');
             }
         } else { // get active target
             if (this.currentActiveProject) {
-                return this.currentActiveProject.getActiveTarget();
+                const target = this.currentActiveProject.getActiveTarget();
+                if (target) { return target; }
+                vscode.window.showWarningMessage(`No Keil target is available in ${this.currentActiveProject.label}.`);
             } else {
-                vscode.window.showWarningMessage('Not found any active project !');
+                vscode.window.showWarningMessage('Open a Keil project first.');
             }
         }
     }
@@ -1751,6 +1940,12 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
         if (element === undefined) {
             return Array.from(this.prjList.values());
         } else {
+            if (element instanceof FileGroup) {
+                const target = this.prjList.get(element.prjID)?.getTargetByName(element.targetName);
+                if (target && target.getFileGroups().includes(element)) {
+                    target.updateSourceRefs(false, element);
+                }
+            }
             return element.getChildViews();
         }
     }

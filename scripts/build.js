@@ -31,7 +31,8 @@ function compileDirectory(directory) {
                 reportDiagnostics: true,
                 compilerOptions: {
                     module: ts.ModuleKind.CommonJS,
-                    target: ts.ScriptTarget.ES2017
+                    target: ts.ScriptTarget.ES2017,
+                    sourceMap: true
                 }
             });
             const errors = (result.diagnostics || []).filter((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error);
@@ -44,6 +45,9 @@ function compileDirectory(directory) {
             }
             fs.mkdirSync(path.dirname(output), { recursive: true });
             fs.writeFileSync(output, result.outputText);
+            if (result.sourceMapText) {
+                fs.writeFileSync(`${output}.map`, result.sourceMapText);
+            }
             console.log(path.relative(root, output));
         }
     }

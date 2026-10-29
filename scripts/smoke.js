@@ -2,6 +2,9 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const Module = require('module');
+const EventEmitter = require('events');
+const childProcess = require('child_process');
+const originalSpawn = childProcess.spawn;
 const extensionRoot = process.env.KEIL_ASSISTANT_EXTENSION_ROOT || path.resolve(__dirname, '..');
 
 const scratchParent = path.resolve(__dirname, '..');
@@ -13,8 +16,8 @@ fs.writeFileSync(projectPath, `<?xml version="1.0" encoding="UTF-8"?>
 <Project><SchemaVersion>2.1</SchemaVersion><Targets><Target>
 <TargetName>Target 1</TargetName>
 <TargetOption><TargetCommonOption><OutputDirectory>Objects</OutputDirectory></TargetCommonOption>
-<TargetArmAds><Cads><VariousControls><IncludePath>../../../../Drivers/Include</IncludePath>
-<Define>USE_HAL_DRIVER,STM32F103xE</Define></VariousControls></Cads></TargetArmAds></TargetOption>
+<TargetArmAds><Cads><VariousControls><IncludePath marker="keep">../../../../Drivers/Include</IncludePath>
+<Define marker="keep">USE_HAL_DRIVER,STM32F103xE</Define></VariousControls></Cads></TargetArmAds></TargetOption>
 <Groups><Group><GroupName>Application</GroupName><Files><File>
 <FileName>main.c</FileName><FilePath>../../../../Core/Src/main.c</FilePath>
 </File></Files></Group></Groups></Target></Targets></Project>`);
@@ -24,8 +27,23 @@ const state = new Map();
 const events = [];
 let provider;
 let latestTask;
-let latestTerminalOptions;
+let latestProcess;
 let dialogSelection;
+let quickPickSelection;
+let taskStartError;
+const taskEndListeners = new Set();
+const outputLines = [];
+childProcess.spawn = (executable, args, options) => {
+    const handle = new EventEmitter();
+    handle.stdout = new EventEmitter();
+    handle.stderr = new EventEmitter();
+    latestProcess = { executable, args, options, handle };
+    events.push('process');
+    return handle;
+};
+const finishTask = (task = latestTask) => {
+    for (const listener of Array.from(taskEndListeners)) { listener({ execution: { task } }); }
+};
 const folder = { name: 'outer', uri: { fsPath: testRoot } };
 const vscode = {
     Uri: { file: (filePath) => ({ scheme: 'file', fsPath: filePath }) },
@@ -51,7 +69,10 @@ const vscode = {
     window: {
         registerTreeDataProvider: (_name, treeProvider) => { provider = treeProvider; return { dispose() {} }; },
         showOpenDialog: async () => dialogSelection ? [dialogSelection] : undefined,
-        showQuickPick: async () => { throw new Error('One nested project must load without a chooser'); },
+        showQuickPick: async (items) => {
+            events.push('quickPick');
+            return quickPickSelection ? items.find(quickPickSelection) : items[0];
+        },
         showInputBox: async () => 'Board & IO',
         showErrorMessage: (message) => { events.push(`error:${message}`); },
         showWarningMessage: (message, ...options) => {
@@ -59,9 +80,13 @@ const vscode = {
             return options.find((option) => typeof option === 'string' && /remove/i.test(option));
         },
         showInformationMessage: (message) => { events.push(`info:${message}`); },
+        createOutputChannel: () => ({
+            append: (text) => outputLines.push(text),
+            appendLine: (text) => outputLines.push(`${text}\n`),
+            show() {}
+        }),
         terminals: [],
         createTerminal: (options) => {
-            latestTerminalOptions = options;
             const terminal = { name: options.name, show() {}, sendText() {}, hide() {}, dispose() {} };
             vscode.window.terminals.push(terminal);
             return terminal;
@@ -69,14 +94,27 @@ const vscode = {
     },
     env: { shell: 'powershell.exe', clipboard: { writeText() {} } },
     Task: class {
-        constructor(_definition, _scope, name) { this.name = name; }
+        constructor(definition, _scope, name) { this.definition = definition; this.name = name; }
     },
     TaskScope: { Global: 1 },
     ProcessExecution: class {
         constructor(executable, args, options) { this.executable = executable; this.args = args; this.options = options; }
     },
     tasks: {
-        executeTask: async (task) => { events.push('task'); latestTask = task; }
+        onDidEndTask: (listener) => {
+            taskEndListeners.add(listener);
+            return { dispose: () => taskEndListeners.delete(listener) };
+        },
+        executeTask: async (task) => {
+            events.push('task');
+            latestTask = task;
+            if (taskStartError) {
+                const error = taskStartError;
+                taskStartError = undefined;
+                throw error;
+            }
+            return { task };
+        }
     }
 };
 
@@ -113,10 +151,65 @@ async function main() {
     const cpp = JSON.parse(fs.readFileSync(cppPath, 'utf8'));
     assert.ok(cpp.configurations[0].defines.includes('STM32F103xE'));
 
+    const referenceTarget = projects[0].getTargets()[0];
+    const referenceSource = referenceTarget.getFileGroups()[0].sources[0];
+    const depPath = path.join(projectDir, 'Objects', 'main.d');
+    fs.mkdirSync(path.dirname(depPath), { recursive: true });
+    fs.writeFileSync(depPath, 'main.o:\n1: ../Inc/one.h\n');
+    const originalReadFile = fs.readFileSync;
+    let dependencyReads = 0;
+    fs.readFileSync = (...args) => {
+        if (path.resolve(args[0]) === depPath) { dependencyReads++; }
+        return originalReadFile(...args);
+    };
+    try {
+        referenceTarget.updateSourceRefs(false);
+        assert.ok(referenceSource.children.some((source) => source.label === 'one.h'));
+        referenceTarget.updateSourceRefs(false);
+        assert.strictEqual(dependencyReads, 1, 'unchanged dependency files should not be read again');
+        fs.writeFileSync(depPath, 'main.o:\n1: ../Inc/two-long.h\n');
+        referenceTarget.updateSourceRefs(false);
+        assert.ok(referenceSource.children.some((source) => source.label === 'two-long.h'));
+        assert.strictEqual(dependencyReads, 2, 'changed dependency files should refresh');
+        fs.unlinkSync(depPath);
+        referenceTarget.updateSourceRefs(false);
+        assert.strictEqual(referenceSource.children, undefined, 'removed dependency files should clear stale references');
+    } finally {
+        fs.readFileSync = originalReadFile;
+    }
+
     await commands.get('project.build')();
     assert.ok(events.indexOf('save') < events.indexOf('task'), 'save should precede build');
     assert.strictEqual(latestTask.execution.options.cwd, projectDir);
     assert.strictEqual(latestTask.execution.args[latestTask.execution.args.indexOf('--prjPath') + 1], projectPath);
+    const firstBuild = latestTask;
+    const taskCount = () => events.filter((value) => value === 'task').length;
+    const firstTaskCount = taskCount();
+    await commands.get('project.rebuild')();
+    await commands.get('project.download')();
+    assert.strictEqual(taskCount(), firstTaskCount, 'rebuild and download must wait while a build owns the shared log');
+    assert.ok(events.some((value) => value.startsWith('warning:Keil build is still running')));
+    await projects[0].reload();
+    await commands.get('project.build')(projects[0]);
+    assert.strictEqual(taskCount(), firstTaskCount, 'a project reload must not release a still-running task lock');
+    finishTask(firstBuild);
+    assert.strictEqual(taskEndListeners.size, 0, 'task end listener should be disposed');
+    await commands.get('project.build')(projects[0]);
+    assert.strictEqual(taskCount(), firstTaskCount + 1, 'project tree build should use its active target after task end');
+    finishTask();
+    taskStartError = new Error('test task start failure');
+    await commands.get('project.build')();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.ok(events.some((value) => value.includes('failed to start: test task start failure')));
+    assert.strictEqual(taskEndListeners.size, 0, 'failed start should dispose its task listener');
+    const countAfterFailure = taskCount();
+    await commands.get('project.build')();
+    assert.strictEqual(taskCount(), countAfterFailure + 1, 'failed task start should release the shared log lock');
+    finishTask();
+    await commands.get('project.active')();
+    await commands.get('project.switch')();
+    await commands.get('item.copyValue')();
+    assert.ok(events.some((value) => value.includes('Use Copy Value from a Keil project tree item')));
 
     const newSourcePath = path.join(testRoot, 'Core', 'Src', 'new.c');
     fs.mkdirSync(path.dirname(newSourcePath), { recursive: true });
@@ -128,7 +221,7 @@ async function main() {
     assert.ok(group, 'Application group should remain visible');
     assert.ok(provider.getChildren(group).some((item) => item.label === 'new.c'), 'Keil tree should refresh with the new file');
 
-    await commands.get('project.createGroup')(target);
+    await commands.get('project.createGroup')();
     const targetWithGroup = provider.getChildren(projects[0])[0];
     const createdGroup = provider.getChildren(targetWithGroup).find((item) => item.label === 'Board & IO');
     assert.ok(createdGroup, 'created Keil group should appear after reload');
@@ -144,6 +237,33 @@ async function main() {
         .find((item) => item.label === 'Board & IO');
     assert.ok(provider.getChildren(groupAfterAdd).some((item) => item.label === 'board.h'),
         'adding a header from the Keil group should refresh the tree');
+
+    const secondHeaderPath = path.join(testRoot, 'Core', 'Inc', 'board2.h');
+    fs.writeFileSync(secondHeaderPath, '#pragma once\n');
+    dialogSelection = vscode.Uri.file(secondHeaderPath);
+    quickPickSelection = (choice) => choice.label === 'Board & IO';
+    await commands.get('project.addFileToGroup')();
+    quickPickSelection = undefined;
+    const groupWithSecondHeader = provider.getChildren(provider.getChildren(projects[0])[0])
+        .find((item) => item.label === 'Board & IO');
+    assert.ok(provider.getChildren(groupWithSecondHeader).some((item) => item.label === 'board2.h'),
+        'command palette add-file should choose a group');
+    quickPickSelection = (choice) => choice.label === 'board2.h';
+    await commands.get('project.removeFile')();
+    quickPickSelection = undefined;
+    const groupWithoutSecondHeader = provider.getChildren(provider.getChildren(projects[0])[0])
+        .find((item) => item.label === 'Board & IO');
+    assert.ok(!provider.getChildren(groupWithoutSecondHeader).some((item) => item.label === 'board2.h'),
+        'command palette remove-file should choose a Keil reference');
+    assert.ok(fs.existsSync(secondHeaderPath), 'command palette removal must keep the disk file');
+
+    const vscodeHeaderPath = path.join(testRoot, 'Core', 'Headers2', 'palette.h');
+    fs.mkdirSync(path.dirname(vscodeHeaderPath), { recursive: true });
+    fs.writeFileSync(vscodeHeaderPath, '#pragma once\n');
+    await commands.get('project.addFile')(vscode.Uri.file(vscodeHeaderPath));
+    const expectedInclude = path.relative(projectDir, path.dirname(vscodeHeaderPath)).replace(/\\/g, '/');
+    assert.ok(fs.readFileSync(projectPath, 'utf8').replace(/\\/g, '/').includes(expectedInclude),
+        'adding a header from VS Code should also add its directory to the Keil IncludePath');
 
     const application = provider.getChildren(targetWithGroup).find((item) => item.label === 'Application');
     const newSource = provider.getChildren(application).find((item) => item.label === 'new.c');
@@ -190,11 +310,26 @@ async function main() {
     atomicGroupSave('Watched Two');
     await waitForGroup('Watched Two');
 
+    await commands.get('project.build')();
+    const taskAtProjectClose = latestTask;
     await commands.get('project.close')(projects[0]);
     projects[0].close();
     latestTask = undefined;
     await commands.get('project.build')();
     assert.strictEqual(latestTask, undefined, 'F7 should not build a closed project');
+    dialogSelection = vscode.Uri.file(projectPath);
+    await commands.get('explorer.open')();
+    const reopenedProject = provider.getChildren()[0];
+    const countBeforeReopenBuild = taskCount();
+    await commands.get('project.build')();
+    assert.strictEqual(taskCount(), countBeforeReopenBuild,
+        'closing and reopening a project must not overlap its still-running build');
+    finishTask(taskAtProjectClose);
+    await commands.get('project.build')();
+    assert.strictEqual(taskCount(), countBeforeReopenBuild + 1,
+        'task completion should release the lock after project close and reopen');
+    finishTask();
+    await commands.get('project.close')(reopenedProject);
 
     const secondPath = path.join(testRoot, 'Second.uvprojx');
     const secondXml = fs.readFileSync(projectPath, 'utf8')
@@ -218,10 +353,42 @@ async function main() {
     assert.strictEqual(new Set(configNames).size, configNames.length,
         'same-named targets in separate projects need separate IntelliSense configurations');
 
+    dialogSelection = vscode.Uri.file(projectPath);
+    await commands.get('explorer.open')();
+    assert.strictEqual(provider.getChildren().length, 2, 'two projects should be available for command palette selection');
+    quickPickSelection = (choice) => typeof choice === 'string' || choice.project?.uvprjFile.path === secondPath;
+    await commands.get('project.active')();
+    await commands.get('project.switch')();
+    quickPickSelection = (choice) => choice.project?.uvprjFile.path === projectPath;
+    await commands.get('project.close')();
+    assert.deepStrictEqual(provider.getChildren().map((project) => project.uvprjFile.path), [secondPath],
+        'command palette close should remove the selected project only');
+    quickPickSelection = undefined;
+
     vscode.workspace.workspaceFolders = [];
     await commands.get('project.build')();
-    assert.strictEqual(latestTerminalOptions.cwd, path.dirname(secondPath),
-        'without a VS Code workspace the Keil terminal must start in the project directory');
+    assert.strictEqual(latestProcess.options.cwd, path.dirname(secondPath),
+        'without a VS Code workspace the Keil process must start in the project directory');
+    const processCount = () => events.filter((value) => value === 'process').length;
+    const initialProcessCount = processCount();
+    await commands.get('project.rebuild')();
+    assert.strictEqual(processCount(), initialProcessCount, 'no-workspace build should hold the shared log lock');
+    latestProcess.handle.stdout.emit('data', Buffer.from('stdout sample\n'));
+    latestProcess.handle.stderr.emit('data', Buffer.from('stderr sample\n'));
+    latestProcess.handle.emit('close', 3, null);
+    assert.ok(outputLines.join('').includes('stdout sample'));
+    assert.ok(outputLines.join('').includes('stderr sample'));
+    assert.ok(outputLines.join('').includes('exited with code 3'));
+    await commands.get('project.download')();
+    assert.strictEqual(processCount(), initialProcessCount + 1, 'process close should release the no-workspace task lock');
+    latestProcess.handle.emit('close', 0, null);
+    await commands.get('project.build')();
+    latestProcess.handle.emit('error', new Error('test process start failure'));
+    assert.ok(events.some((value) => value.includes('failed to start: test process start failure')));
+    const countAfterProcessError = processCount();
+    await commands.get('project.build')();
+    assert.strictEqual(processCount(), countAfterProcessError + 1, 'process error should release the no-workspace task lock');
+    latestProcess.handle.emit('close', 0, null);
     const targetsBeforeClose = secondProject.getTargets();
     const pendingReload = secondProject.reload();
     await commands.get('project.close')(secondProject);
@@ -240,14 +407,15 @@ async function main() {
         'C51 projects with omitted controls and groups should still load');
     await commands.get('project.createGroup')(provider.getChildren(c51Project)[0]);
     assert.ok(provider.getChildren(provider.getChildren(c51Project)[0]).some((item) => item.label === 'Board & IO'));
-    await commands.get('project.close')(c51Project);
+    await commands.get('project.close')();
     c51Project.close();
-    console.log('Smoke test passed: discovery, build cwd, IntelliSense isolation, partial save, atomic watcher, project editing, close/F7.');
+    console.log('Smoke test passed: discovery, command palette, task lifecycle, build cwd, IntelliSense, watcher, project editing, close/F7.');
     await require('./test_project_edit').run(extensionRoot);
 }
 
 main().catch((error) => { console.error(error); process.exitCode = 1; }).finally(() => {
     Module._load = originalLoad;
+    childProcess.spawn = originalSpawn;
     const resolvedTestRoot = path.resolve(testRoot);
     if (path.dirname(resolvedTestRoot) === scratchParent &&
         path.basename(resolvedTestRoot).startsWith('.keil-assistant-smoke-')) {
