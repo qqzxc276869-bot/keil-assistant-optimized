@@ -2,6 +2,13 @@
 
 All notable changes to the "keil-assistant" extension will be documented in this file.
 
+## [v1.7.9] Add multiple Keil project files
+- Add saved assembly (`.s` / `.S`, `.asm`, `.a51`, `.a66`), C++, library, and header/include files to a Keil group alongside `.c` and `.h`
+- Allow selecting several files in one file dialog or from a multi-selection in the VS Code Explorer
+- Write added file references in one project update and report files that are already present in another group
+
+***
+
 ## [v1.7.8] Project editing and build workflow
 - Add a header's directory to the selected Target's Keil IncludePath when adding an existing `.h` file from VS Code or the Keil project tree
 - Let project, group, and file commands invoked from the Command Palette prompt for the missing selection instead of failing or silently doing nothing

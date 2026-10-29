@@ -10,7 +10,7 @@ The original workflow required creating groups and adding files in Keil, then sa
 | --- | --- |
 | Project discovery | Recursively find nested `.uvproj` / `.uvprojx` files, choose among projects by path, remember manually opened projects, and keep the outer source workspace open. |
 | Builds | Save edited VS Code files before build or rebuild, run `UV4.exe` from the project directory, validate its path, and prevent overlapping tasks for one project. |
-| Project management | Create Keil groups, add existing `.c` / `.h` files to a chosen target and group, remove project references without deleting disk files, and add header directories to the chosen target's IncludePath. |
+| Project management | Create Keil groups, add several existing C/C++, assembly, header, or library files to a chosen target and group at once, remove project references without deleting disk files, and add header directories to the chosen target's IncludePath. |
 | Editor configuration | Place C/C++ IntelliSense settings in the workspace containing the project while preserving JSONC comments and user configurations. |
 
 Builds and downloads still use the locally installed Keil tools. Groups and file references can be managed in VS Code.
@@ -44,9 +44,9 @@ Keil Assistant displays Keil C51/ARM projects in VS Code and uses Keil uVision t
 
   ![build](./res/preview/build.png)
 
-- **Add a new file to a Keil project from VS Code**: After creating and saving a `.c` or `.h` file, right-click it in the VS Code Explorer and select **Add File to Keil Project**. You can also open the file and run the same command from the Command Palette. Select the loaded Keil project, target, and group; the extension updates the project file without opening Keil. A `.c` file participates in the selected target's build. When adding a `.h` file, the extension also adds its directory to that target's Keil `IncludePath`, without duplicating an existing path.
+- **Add files to a Keil project from VS Code**: After creating and saving files, select one or several in the VS Code Explorer and choose **Add File to Keil Project**. You can also run the command from the Command Palette and select several files in the file picker. Choose the loaded Keil project, target, and group; the extension updates the project file in one operation. Supported types include `.c`, `.cpp`, `.s` / `.S`, `.asm`, `.a51`, `.h`, `.hpp`, `.inc`, and `.lib`. Adding a C/C++ header also adds its directory to the chosen target's Keil `IncludePath`, without duplicating an existing path. Files already in the project are reported with their existing group.
 
-- **Manage the Keil project tree directly**: Right-click a project or target in the extension's project tree and choose **New Keil Group** to create a group. Right-click a group and choose **Add File to Keil Group** to select an existing `.c` or `.h` file from disk. Right-click a file in a group and choose **Remove File from Keil Project** to remove its reference from that target's project group while keeping the disk file. These commands also work from the Command Palette and prompt for the missing project, group, or file. **Delete** in VS Code's built-in Explorer is a separate action that deletes the disk file.
+- **Manage the Keil project tree directly**: Right-click a project or target in the extension's project tree and choose **New Keil Group** to create a group. Right-click a group and choose **Add File to Keil Group** to select several existing files from disk. Right-click a file in a group and choose **Remove File from Keil Project** to remove its reference from that target's project group while keeping the disk file. These commands also work from the Command Palette and prompt for the missing project, group, or file. **Delete** in VS Code's built-in Explorer is a separate action that deletes the disk file.
 
 - **Refresh after changing the project in Keil**: After adding or removing source files or editing include paths in Keil, click **Save All** there. The project view refreshes when the extension detects the project file change.
 

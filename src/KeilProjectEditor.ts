@@ -8,6 +8,22 @@ export interface AddFileResult {
     groupName: string;
 }
 
+// uVision's FileType values are stored in .uvproj/.uvprojx, independent of
+// filename case. Keep this list shared with the VS Code file picker.
+const KEIL_FILE_TYPES: { [extension: string]: string } = {
+    '.c': '1',
+    '.s': '2', '.asm': '2', '.a51': '2', '.a66': '2',
+    '.lib': '4',
+    '.h': '5', '.hpp': '5', '.hxx': '5', '.hh': '5', '.inc': '5',
+    '.cpp': '8', '.cc': '8', '.cxx': '8', '.c++': '8'
+};
+
+export const SUPPORTED_KEIL_FILE_EXTENSIONS: readonly string[] = Object.keys(KEIL_FILE_TYPES);
+
+export function getKeilFileType(sourcePath: string): string | undefined {
+    return KEIL_FILE_TYPES[node_path.extname(sourcePath).toLowerCase()];
+}
+
 export interface ProjectEditResult {
     status: 'created' | 'already-present' | 'removed' | 'not-present';
 }
@@ -200,16 +216,20 @@ function elementRemovalRange(xml: string, element: XmlElement): { start: number,
     return { start: element.start, end: element.end };
 }
 
-/** Add a saved C source or header to exactly one target and group. */
-export async function addFileToKeilProject(projectPath: string, targetName: string, groupName: string,
-    sourcePath: string): Promise<AddFileResult> {
-    const extension = node_path.extname(sourcePath).toLowerCase();
-    if (extension !== '.c' && extension !== '.h') {
-        throw new Error('Choose a saved .c or .h file.');
-    }
-    if (!fs.statSync(sourcePath).isFile()) {
-        throw new Error(`The source file does not exist: ${sourcePath}`);
-    }
+/** Add multiple saved files to exactly one target and group in one project write. */
+export async function addFilesToKeilProject(projectPath: string, targetName: string, groupName: string,
+    sourcePaths: string[]): Promise<AddFileResult[]> {
+    if (!sourcePaths.length) { return []; }
+    const sources = sourcePaths.map((sourcePath) => {
+        const fileType = getKeilFileType(sourcePath);
+        if (!fileType) {
+            throw new Error(`Unsupported Keil file type: ${node_path.basename(sourcePath)}`);
+        }
+        if (!fs.existsSync(sourcePath) || !fs.statSync(sourcePath).isFile()) {
+            throw new Error(`The source file does not exist: ${sourcePath}`);
+        }
+        return { path: node_path.resolve(sourcePath), fileType };
+    });
     const projectDir = node_path.dirname(projectPath);
     const { buffer, xml } = readUtf8Project(projectPath);
     const parser = new xml2js.Parser({ explicitArray: false });
@@ -224,16 +244,32 @@ export async function addFileToKeilProject(projectPath: string, targetName: stri
     if (matchingGroups.length !== 1) { throw new Error(`Keil group is missing or ambiguous: ${groupName}`); }
     const groupIndex = matchingGroups[0];
 
-    const sourceKey = projectPathKey(projectDir, sourcePath);
+    const knownFiles = new Map<string, string>();
     for (const group of groupData) {
         for (const files of asArray<any>(group.Files)) {
             for (const file of asArray<any>(files.File)) {
-                if (typeof file.FilePath === 'string' && projectPathKey(projectDir, file.FilePath) === sourceKey) {
-                    return { status: 'already-present', groupName: group.GroupName };
+                if (typeof file.FilePath === 'string') {
+                    const key = projectPathKey(projectDir, file.FilePath);
+                    if (!knownFiles.has(key)) { knownFiles.set(key, group.GroupName); }
                 }
             }
         }
     }
+
+    const results: AddFileResult[] = [];
+    const additions: { path: string, fileType: string }[] = [];
+    for (const source of sources) {
+        const key = projectPathKey(projectDir, source.path);
+        const existingGroup = knownFiles.get(key);
+        if (existingGroup !== undefined) {
+            results.push({ status: 'already-present', groupName: existingGroup });
+        } else {
+            knownFiles.set(key, groupName);
+            additions.push(source);
+            results.push({ status: 'added', groupName });
+        }
+    }
+    if (!additions.length) { return results; }
 
     const groupElements = direct(one(targetElement(xml, targetData.length, targetIndex), 'Groups'), 'Group');
     if (groupElements.length !== groupData.length) {
@@ -252,37 +288,47 @@ export async function addFileToKeilProject(projectPath: string, targetName: stri
     const existingFile = filesElement && direct(filesElement, 'File')[0];
     const fileIndent = existingFile ? (lineIndent(xml, existingFile.start) || filesIndent + unit) : filesIndent + unit;
     const fieldIndent = fileIndent + unit;
-    const fileName = xmlEscape(node_path.basename(sourcePath));
-    const relativePath = xmlEscape(node_path.relative(projectDir, sourcePath).replace(/\//g, '\\'));
-    const fileType = extension === '.c' ? '1' : '5';
-    const fileBlock = `${fileIndent}<File>${eol}` +
-        `${fieldIndent}<FileName>${fileName}</FileName>${eol}` +
-        `${fieldIndent}<FileType>${fileType}</FileType>${eol}` +
-        `${fieldIndent}<FilePath>${relativePath}</FilePath>${eol}` +
-        `${fileIndent}</File>`;
+    const fileBlocks = additions.map((source) => {
+        const fileName = xmlEscape(node_path.basename(source.path));
+        const relativePath = xmlEscape(node_path.relative(projectDir, source.path).replace(/\//g, '\\'));
+        return `${fileIndent}<File>${eol}` +
+            `${fieldIndent}<FileName>${fileName}</FileName>${eol}` +
+            `${fieldIndent}<FileType>${source.fileType}</FileType>${eol}` +
+            `${fieldIndent}<FilePath>${relativePath}</FilePath>${eol}` +
+            `${fileIndent}</File>`;
+    }).join(eol);
 
     let updated: string;
     if (!filesElement) {
-        const filesBlock = `${filesIndent}<Files>${eol}${fileBlock}${eol}${filesIndent}</Files>`;
+        const filesBlock = `${filesIndent}<Files>${eol}${fileBlocks}${eol}${filesIndent}</Files>`;
         updated = insertBeforeClose(xml, groupElement, filesBlock, eol, groupIndent);
     } else if (filesElement.selfClosing) {
-        updated = expandSelfClosingElement(xml, filesElement, fileBlock, eol, filesIndent);
+        updated = expandSelfClosingElement(xml, filesElement, fileBlocks, eol, filesIndent);
     } else {
-        updated = insertBeforeClose(xml, filesElement, fileBlock, eol, filesIndent);
+        updated = insertBeforeClose(xml, filesElement, fileBlocks, eol, filesIndent);
     }
 
     const after = await parser.parseStringPromise(updated);
     const afterTargets = asArray<any>(after.Project.Targets.Target);
     const afterGroups = asArray<any>(afterTargets[targetIndex].Groups.Group);
     const afterFiles = asArray<any>(afterGroups[groupIndex].Files.File);
-    const storedPath = node_path.relative(projectDir, sourcePath).replace(/\//g, '\\');
-    if (!afterFiles.some((file) => file.FileName === node_path.basename(sourcePath) &&
-        file.FileType === fileType && file.FilePath === storedPath)) {
-        throw new Error('The changed Keil project could not be verified; it was not saved.');
+    for (const source of additions) {
+        const storedPath = node_path.relative(projectDir, source.path).replace(/\//g, '\\');
+        if (!afterFiles.some((file) => file.FileName === node_path.basename(source.path) &&
+            file.FileType === source.fileType && file.FilePath === storedPath)) {
+            throw new Error('The changed Keil project could not be verified; it was not saved.');
+        }
     }
 
     writeProjectChange(projectPath, buffer, updated);
-    return { status: 'added', groupName };
+    return results;
+}
+
+/** Preserve the single-file API for existing extension commands and callers. */
+export async function addFileToKeilProject(projectPath: string, targetName: string, groupName: string,
+    sourcePath: string): Promise<AddFileResult> {
+    const results = await addFilesToKeilProject(projectPath, targetName, groupName, [sourcePath]);
+    return results[0];
 }
 
 /** Create a virtual Keil group in one target. No disk folder is created. */

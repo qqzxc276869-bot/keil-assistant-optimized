@@ -28,8 +28,8 @@ function getFiles(group) {
 }
 
 async function run(extensionRoot = path.resolve(__dirname, '..')) {
-    const { addFileToKeilProject, createGroupInKeilProject, removeFileFromKeilProject,
-        addIncludeDirectoryToKeilProject } =
+    const { addFileToKeilProject, addFilesToKeilProject, getKeilFileType,
+        createGroupInKeilProject, removeFileFromKeilProject, addIncludeDirectoryToKeilProject } =
         require(path.join(extensionRoot, 'dist', 'src', 'KeilProjectEditor'));
     const scratchParent = path.resolve(__dirname, '..');
     const testRoot = fs.mkdtempSync(path.join(scratchParent, '.keil-assistant-project-edit-'));
@@ -40,12 +40,21 @@ async function run(extensionRoot = path.resolve(__dirname, '..')) {
         const cPath = path.join(sourceDir, 'Src', 'clock.c');
         const extraPath = path.join(sourceDir, 'Src', 'extra.c');
         const hPath = path.join(sourceDir, 'Inc', 'config&bus.h');
+        const asmPath = path.join(projectDir, 'startup_stm32f103xe.s');
+        const uppercaseAsmPath = path.join(projectDir, 'startup_extra.S');
+        const cppPath = path.join(sourceDir, 'Src', 'device.cpp');
+        const libPath = path.join(sourceDir, 'Lib', 'driver.lib');
         fs.mkdirSync(projectDir, { recursive: true });
         fs.mkdirSync(path.dirname(cPath), { recursive: true });
         fs.mkdirSync(path.dirname(hPath), { recursive: true });
+        fs.mkdirSync(path.dirname(libPath), { recursive: true });
         fs.writeFileSync(cPath, 'void clock_init(void) {}\n');
         fs.writeFileSync(extraPath, 'void extra_init(void) {}\n');
         fs.writeFileSync(hPath, '#pragma once\n');
+        fs.writeFileSync(asmPath, '    THUMB\n');
+        fs.writeFileSync(uppercaseAsmPath, '    THUMB\n');
+        fs.writeFileSync(cppPath, 'int device = 0;\n');
+        fs.writeFileSync(libPath, 'test library\n');
 
         const initialXml = [
             '<?xml version="1.0" encoding="UTF-8"?>',
@@ -106,6 +115,60 @@ async function run(extensionRoot = path.resolve(__dirname, '..')) {
         await assert.rejects(() => addFileToKeilProject(projectPath, 'Missing', 'Application', cPath));
         await assert.rejects(() => addFileToKeilProject(projectPath, 'Debug', 'Missing', cPath));
         assert.strictEqual(fs.readFileSync(projectPath, 'utf8'), beforeDuplicate, 'invalid selection should not edit the project');
+
+        assert.strictEqual(getKeilFileType(asmPath), '2', 'the supplied STM32 startup file is Keil assembler');
+        assert.strictEqual(getKeilFileType(uppercaseAsmPath), '2', 'uppercase .S must be recognized');
+        assert.strictEqual(getKeilFileType(cppPath), '8', 'C++ sources require Keil FileType 8');
+        assert.strictEqual(getKeilFileType(libPath), '4', 'Keil libraries require FileType 4');
+        assert.strictEqual(getKeilFileType(path.join(sourceDir, 'notes.txt')), undefined,
+            'unknown types must not be assigned an arbitrary compiler type');
+        const originalRename = fs.renameSync;
+        let batchWrites = 0;
+        fs.renameSync = (from, to) => {
+            if (to === projectPath) { batchWrites++; }
+            return originalRename(from, to);
+        };
+        let batchResults;
+        try {
+            batchResults = await addFilesToKeilProject(projectPath, 'Debug', 'Application',
+                [asmPath, uppercaseAsmPath, cppPath, libPath, cPath, asmPath]);
+        } finally {
+            fs.renameSync = originalRename;
+        }
+        assert.deepStrictEqual(batchResults, [
+            { status: 'added', groupName: 'Application' },
+            { status: 'added', groupName: 'Application' },
+            { status: 'added', groupName: 'Application' },
+            { status: 'added', groupName: 'Application' },
+            { status: 'already-present', groupName: 'Application' },
+            { status: 'already-present', groupName: 'Application' }
+        ]);
+        assert.strictEqual(batchWrites, 1, 'a multi-file selection should write the project once');
+        actualXml = fs.readFileSync(projectPath, 'utf8');
+        assert.ok(!/(^|[^\r])\n/.test(actualXml), 'batch insert should preserve CRLF');
+        assert.ok(actualXml.includes(releaseSection), 'batch insert must leave other targets unchanged');
+        parsed = await parseXml(actualXml);
+        debugFiles = getFiles(getGroup(getTarget(parsed, 'Debug'), 'Application'));
+        assert.strictEqual(debugFiles.find((file) => file.FileName === path.basename(asmPath)).FileType, '2');
+        assert.strictEqual(debugFiles.find((file) => file.FileName === path.basename(uppercaseAsmPath)).FileType, '2');
+        assert.strictEqual(debugFiles.find((file) => file.FileName === path.basename(cppPath)).FileType, '8');
+        assert.strictEqual(debugFiles.find((file) => file.FileName === path.basename(libPath)).FileType, '4');
+        assert.strictEqual(debugFiles.filter((file) => file.FileName === path.basename(asmPath)).length, 1,
+            'duplicate selection must not create a second startup file');
+        const allExisting = await addFilesToKeilProject(projectPath, 'Debug', 'Headers', [asmPath, cPath]);
+        assert.deepStrictEqual(allExisting, [
+            { status: 'already-present', groupName: 'Application' },
+            { status: 'already-present', groupName: 'Application' }
+        ], 'existing startup files should report their actual Keil group');
+        assert.strictEqual(fs.readFileSync(projectPath, 'utf8'), actualXml,
+            'an entirely duplicate batch should not write the project');
+        const beforeRejectedBatch = actualXml;
+        await assert.rejects(() => addFilesToKeilProject(projectPath, 'Debug', 'Application',
+            [extraPath, path.join(sourceDir, 'notes.txt')]), /Unsupported Keil file type/);
+        await assert.rejects(() => addFilesToKeilProject(projectPath, 'Debug', 'Application',
+            [extraPath, path.join(sourceDir, 'missing.c')]), /does not exist/);
+        assert.strictEqual(fs.readFileSync(projectPath, 'utf8'), beforeRejectedBatch,
+            'invalid batches must leave the project unchanged');
 
         const createdGroup = await createGroupInKeilProject(projectPath, 'Debug', 'Board & IO');
         assert.deepStrictEqual(createdGroup, { status: 'created' });

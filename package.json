@@ -2,7 +2,7 @@
     "name": "keil-assistant-optimized",
     "displayName": "Keil Assistant (Optimized)",
     "description": "Manage and build Keil uVision projects from VS Code",
-    "version": "1.7.8",
+    "version": "1.7.9",
     "publisher": "qqzxc276869-bot",
     "author": {
         "name": "Goal",
@@ -182,14 +182,14 @@
             "explorer/context": [
                 {
                     "command": "project.addFile",
-                    "when": "resourceExtname == .c || resourceExtname == .h || resourceExtname == .C || resourceExtname == .H",
+                    "when": "resourceExtname =~ /\\.(c|s|asm|a51|a66|lib|h|hpp|hxx|hh|inc|cpp|cc|cxx|c\\+\\+)$/i",
                     "group": "navigation@10"
                 }
             ],
             "editor/context": [
                 {
                     "command": "project.addFile",
-                    "when": "resourceExtname == .c || resourceExtname == .h || resourceExtname == .C || resourceExtname == .H",
+                    "when": "resourceExtname =~ /\\.(c|s|asm|a51|a66|lib|h|hpp|hxx|hh|inc|cpp|cc|cxx|c\\+\\+)$/i",
                     "group": "navigation@10"
                 }
             ],

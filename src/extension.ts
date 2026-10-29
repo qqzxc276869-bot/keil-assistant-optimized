@@ -9,8 +9,8 @@ import * as child_process from 'child_process';
 import { File } from '../lib/node_utility/File';
 import { ResourceManager } from './ResourceManager';
 import { Time } from '../lib/node_utility/Time';
-import { addFileToKeilProject, addIncludeDirectoryToKeilProject, createGroupInKeilProject,
-    removeFileFromKeilProject } from './KeilProjectEditor';
+import { addFilesToKeilProject, addIncludeDirectoryToKeilProject, createGroupInKeilProject,
+    getKeilFileType, removeFileFromKeilProject, SUPPORTED_KEIL_FILE_EXTENSIONS } from './KeilProjectEditor';
 import { CppConfiguration, updateCppConfigurationsFile } from './CppConfigWriter';
 
 export function activate(context: vscode.ExtensionContext) {
@@ -49,7 +49,8 @@ export function activate(context: vscode.ExtensionContext) {
 
     subscriber.push(vscode.commands.registerCommand('explorer.discover', () => prjExplorer.loadWorkspace(true)));
 
-    subscriber.push(vscode.commands.registerCommand('project.addFile', (uri?: vscode.Uri) => prjExplorer.addFileFromVSCode(uri)));
+    subscriber.push(vscode.commands.registerCommand('project.addFile',
+        (uri?: vscode.Uri, selectedUris?: vscode.Uri[]) => prjExplorer.addFileFromVSCode(uri, selectedUris)));
     subscriber.push(vscode.commands.registerCommand('project.addFileToGroup', (item?: FileGroup) => prjExplorer.addFileToGroup(item)));
     subscriber.push(vscode.commands.registerCommand('project.createGroup', (item?: IView) => prjExplorer.createGroup(item)));
     subscriber.push(vscode.commands.registerCommand('project.removeFile', (item?: Source) => prjExplorer.removeFile(item)));
@@ -183,6 +184,7 @@ class Source implements IView {
             case '.h':
             case '.hpp':
             case '.hxx':
+            case '.hh':
             case '.inc':
                 return 'CPPHeaderFile_16x';
             case '.cpp':
@@ -192,6 +194,7 @@ class Source implements IView {
                 return 'CPP_16x';
             case '.s':
             case '.a51':
+            case '.a66':
             case '.asm':
                 return 'AssemblerSourceFile_16x';
             case '.lib':
@@ -1681,28 +1684,110 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
         }
     }
 
-    private async addSelectedFile(project: KeilProject, target: Target, group: FileGroup, sourcePath: string) {
-        if (!await vscode.workspace.saveAll()) { return; }
-        const result = await addFileToKeilProject(project.uvprjFile.path, target.targetName, group.label, sourcePath);
-        let includeChanged = false;
-        let includeError: Error | undefined;
-        if (/\.h$/i.test(sourcePath)) {
-            try {
-                const includeResult = await addIncludeDirectoryToKeilProject(project.uvprjFile.path,
-                    target.targetName, node_path.dirname(sourcePath));
-                includeChanged = includeResult.status === 'created';
-            } catch (error) {
-                includeError = <Error>error;
+    private collectKeilFiles(uris: readonly vscode.Uri[]): { paths: string[]; skipped: string[] } {
+        const paths: string[] = [];
+        const skipped: string[] = [];
+        const seen = new Set<string>();
+        for (const uri of uris) {
+            if (!uri || uri.scheme !== 'file') {
+                skipped.push('a non-local item');
+                continue;
+            }
+            const sourcePath = uri.fsPath;
+            const key = node_path.resolve(sourcePath);
+            const normalizedKey = process.platform === 'win32' ? key.toLowerCase() : key;
+            if (seen.has(normalizedKey)) { continue; }
+            seen.add(normalizedKey);
+            if (!new File(sourcePath).IsFile()) {
+                skipped.push(`${node_path.basename(sourcePath)} (not a saved file)`);
+            } else if (!getKeilFileType(sourcePath)) {
+                skipped.push(`${node_path.basename(sourcePath)} (unsupported file type)`);
+            } else {
+                paths.push(sourcePath);
             }
         }
-        if (result.status === 'added' || includeChanged) { await project.reload(); }
-        const fileName = node_path.basename(sourcePath);
-        if (includeError) {
-            vscode.window.showWarningMessage(`${fileName} is in ${target.targetName} / ${result.groupName}, but its header directory could not be added to IncludePath: ${includeError.message}`);
-        } else if (result.status === 'already-present') {
-            vscode.window.showInformationMessage(`${fileName} is already in ${target.targetName} / ${result.groupName}${includeChanged ? '; its header directory was added to IncludePath' : ''}.`);
+        return { paths, skipped };
+    }
+
+    private reportSkippedFiles(skipped: string[]): string {
+        const examples = skipped.slice(0, 3).join(', ');
+        return skipped.length > 3 ? `${examples}, and ${skipped.length - 3} more` : examples;
+    }
+
+    private isCHeaderFile(sourcePath: string): boolean {
+        return /\.(h|hpp|hxx|hh)$/i.test(sourcePath);
+    }
+
+    private async addSelectedFiles(project: KeilProject, target: Target, group: FileGroup,
+        sourcePaths: string[], initiallySkipped: string[]) {
+        const skipped = initiallySkipped.slice();
+        const paths = sourcePaths.filter((sourcePath) => {
+            if (group.excludedFromBuild && getKeilFileType(sourcePath) !== '5') {
+                skipped.push(`${node_path.basename(sourcePath)} (group excluded from build)`);
+                return false;
+            }
+            return true;
+        });
+        if (!paths.length) {
+            vscode.window.showWarningMessage(`No files were added. ${this.reportSkippedFiles(skipped)}`);
+            return;
+        }
+        if (!await vscode.workspace.saveAll()) { return; }
+
+        const results = await addFilesToKeilProject(project.uvprjFile.path, target.targetName, group.label, paths);
+        const headerDirs = new Map<string, string>();
+        paths.forEach((sourcePath) => {
+            if (!this.isCHeaderFile(sourcePath)) { return; }
+            const directory = node_path.dirname(sourcePath);
+            const key = process.platform === 'win32' ? directory.toLowerCase() : directory;
+            headerDirs.set(key, directory);
+        });
+        let includeChanged = 0;
+        const includeErrors: string[] = [];
+        for (const directory of headerDirs.values()) {
+            try {
+                const includeResult = await addIncludeDirectoryToKeilProject(project.uvprjFile.path,
+                    target.targetName, directory);
+                if (includeResult.status === 'created') { includeChanged++; }
+            } catch (error) {
+                includeErrors.push(`${directory}: ${(<Error>error).message}`);
+            }
+        }
+
+        const added = results.filter((result) => result.status === 'added').length;
+        if (added || includeChanged) {
+            try { await project.reload(); }
+            catch (error) {
+                vscode.window.showWarningMessage(`The Keil project was updated, but its view could not refresh: ${(<Error>error).message}`);
+                return;
+            }
+        }
+        if (paths.length === 1 && skipped.length === 0 && includeErrors.length === 0) {
+            const fileName = node_path.basename(paths[0]);
+            const result = results[0];
+            if (result.status === 'already-present') {
+                vscode.window.showInformationMessage(`${fileName} is already in ${target.targetName} / ${result.groupName}${includeChanged ? '; its header directory was added to IncludePath' : ''}.`);
+            } else {
+                vscode.window.showInformationMessage(`Added ${fileName} to ${target.targetName} / ${group.label}${includeChanged ? ' and its directory to IncludePath' : ''}.`);
+            }
+            return;
+        }
+
+        const already = results.map((result, index) => result.status === 'already-present'
+            ? `${node_path.basename(paths[index])} (${result.groupName})` : undefined)
+            .filter((item): item is string => !!item);
+        const summary = `Keil ${target.targetName} / ${group.label}: added ${added}, already listed ${already.length}` +
+            `${includeChanged ? `, include directories added ${includeChanged}` : ''}` +
+            `${skipped.length ? `, skipped ${skipped.length}` : ''}.`;
+        const details = [
+            already.length ? `Already listed: ${this.reportSkippedFiles(already)}.` : '',
+            skipped.length ? `Skipped: ${this.reportSkippedFiles(skipped)}.` : '',
+            includeErrors.length ? `IncludePath failed: ${this.reportSkippedFiles(includeErrors)}.` : ''
+        ].filter(Boolean).join(' ');
+        if (skipped.length || includeErrors.length) {
+            vscode.window.showWarningMessage(`${summary} ${details}`);
         } else {
-            vscode.window.showInformationMessage(`Added ${fileName} to ${target.targetName} / ${group.label}${includeChanged ? ' and its directory to IncludePath' : ''}.`);
+            vscode.window.showInformationMessage(`${summary} ${details}`);
         }
     }
 
@@ -1739,45 +1824,38 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
             const selected = await vscode.window.showOpenDialog({
                 openLabel: `Add to ${item.label}`,
                 canSelectFolders: false,
-                canSelectMany: false,
-                filters: { 'C source and header': ['c', 'h'] }
+                canSelectMany: true,
+                filters: { 'Keil project files': Array.from(SUPPORTED_KEIL_FILE_EXTENSIONS, (extension) => extension.slice(1)) }
             });
-            const sourcePath = selected && selected[0]?.fsPath;
-            if (!sourcePath) { return; }
-            if (!/\.(c|h)$/i.test(sourcePath) || !new File(sourcePath).IsFile()) {
-                vscode.window.showWarningMessage('Choose a saved .c or .h file.');
+            if (!selected || !selected.length) { return; }
+            const { paths, skipped } = this.collectKeilFiles(selected);
+            if (!paths.length) {
+                vscode.window.showWarningMessage(`Choose saved Keil source, assembly, library, or header files. ${this.reportSkippedFiles(skipped)}`);
                 return;
             }
-            if (/\.c$/i.test(sourcePath) && group.excludedFromBuild) {
-                vscode.window.showWarningMessage('This Keil group is excluded from build. Choose a build-enabled group for the .c file.');
-                return;
-            }
-            await this.addSelectedFile(project, target, group, sourcePath);
+            await this.addSelectedFiles(project, target, group, paths, skipped);
         } catch (error) {
             vscode.window.showErrorMessage(`Could not add the file to the Keil group: ${(<Error>error).message}`);
         }
     }
 
-    async addFileFromVSCode(uri?: vscode.Uri) {
+    async addFileFromVSCode(uri?: vscode.Uri, selectedUris?: vscode.Uri[]) {
         try {
-            let sourceUri = uri;
-            if (!sourceUri || sourceUri.scheme !== 'file') {
-                const editorUri = vscode.window.activeTextEditor?.document.uri;
-                sourceUri = editorUri && editorUri.scheme === 'file' ? editorUri : undefined;
-            }
-            if (!sourceUri) {
+            let sourceUris = selectedUris && selectedUris.length ? selectedUris :
+                uri && uri.scheme === 'file' ? [uri] : [];
+            if (!sourceUris.length) {
                 const selected = await vscode.window.showOpenDialog({
                     openLabel: 'Add to Keil project',
                     canSelectFolders: false,
-                    canSelectMany: false,
-                    filters: { 'C source and header': ['c', 'h'] }
+                    canSelectMany: true,
+                    filters: { 'Keil project files': Array.from(SUPPORTED_KEIL_FILE_EXTENSIONS, (extension) => extension.slice(1)) }
                 });
-                sourceUri = selected && selected[0];
+                sourceUris = selected || [];
             }
-            if (!sourceUri) { return; }
-            const sourcePath = sourceUri.fsPath;
-            if (!/\.(c|h)$/i.test(sourcePath) || !new File(sourcePath).IsFile()) {
-                vscode.window.showWarningMessage('Choose a saved .c or .h file to add to the Keil project.');
+            if (!sourceUris.length) { return; }
+            const { paths, skipped } = this.collectKeilFiles(sourceUris);
+            if (!paths.length) {
+                vscode.window.showWarningMessage(`Choose saved Keil source, assembly, library, or header files. ${this.reportSkippedFiles(skipped)}`);
                 return;
             }
 
@@ -1817,10 +1895,12 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
             }
             if (!target) { return; }
 
-            const isCSource = /\.c$/i.test(sourcePath);
-            const groups = target.getFileGroups().filter((group) => !isCSource || !group.excludedFromBuild);
+            const hasBuildInput = paths.some((sourcePath) => getKeilFileType(sourcePath) !== '5');
+            const groups = target.getFileGroups().filter((group) => !hasBuildInput || !group.excludedFromBuild);
             if (!groups.length) {
-                vscode.window.showWarningMessage('No build-enabled Keil group is available in this target.');
+                vscode.window.showWarningMessage(hasBuildInput
+                    ? 'No build-enabled Keil group is available in this target.'
+                    : 'No Keil group is available in this target. Create a group first.');
                 return;
             }
             let group: FileGroup | undefined;
@@ -1835,7 +1915,7 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
                 group = selected?.group;
             }
             if (!group) { return; }
-            await this.addSelectedFile(project, target, group, sourcePath);
+            await this.addSelectedFiles(project, target, group, paths, skipped);
         } catch (error) {
             vscode.window.showErrorMessage(`Could not add the file to the Keil project: ${(<Error>error).message}`);
         }

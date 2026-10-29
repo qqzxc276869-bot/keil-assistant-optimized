@@ -12,6 +12,8 @@ const testRoot = fs.mkdtempSync(path.join(scratchParent, '.keil-assistant-smoke-
 const projectDir = path.join(testRoot, 'Projects', 'Board', 'MDK-ARM');
 const projectPath = path.join(projectDir, 'Project.uvprojx');
 fs.mkdirSync(projectDir, { recursive: true });
+const existingStartupPath = path.join(projectDir, 'startup_stm32f103xe.s');
+fs.writeFileSync(existingStartupPath, '; existing startup assembly\n');
 fs.writeFileSync(projectPath, `<?xml version="1.0" encoding="UTF-8"?>
 <Project><SchemaVersion>2.1</SchemaVersion><Targets><Target>
 <TargetName>Target 1</TargetName>
@@ -20,7 +22,8 @@ fs.writeFileSync(projectPath, `<?xml version="1.0" encoding="UTF-8"?>
 <Define marker="keep">USE_HAL_DRIVER,STM32F103xE</Define></VariousControls></Cads></TargetArmAds></TargetOption>
 <Groups><Group><GroupName>Application</GroupName><Files><File>
 <FileName>main.c</FileName><FilePath>../../../../Core/Src/main.c</FilePath>
-</File></Files></Group></Groups></Target></Targets></Project>`);
+</File><File><FileName>startup_stm32f103xe.s</FileName><FileType>2</FileType>
+<FilePath>startup_stm32f103xe.s</FilePath></File></Files></Group></Groups></Target></Targets></Project>`);
 
 const commands = new Map();
 const state = new Map();
@@ -29,6 +32,8 @@ let provider;
 let latestTask;
 let latestProcess;
 let dialogSelection;
+let dialogSelections;
+let lastOpenDialogOptions;
 let quickPickSelection;
 let taskStartError;
 const taskEndListeners = new Set();
@@ -68,7 +73,10 @@ const vscode = {
     },
     window: {
         registerTreeDataProvider: (_name, treeProvider) => { provider = treeProvider; return { dispose() {} }; },
-        showOpenDialog: async () => dialogSelection ? [dialogSelection] : undefined,
+        showOpenDialog: async (options) => {
+            lastOpenDialogOptions = options;
+            return dialogSelections || (dialogSelection ? [dialogSelection] : undefined);
+        },
         showQuickPick: async (items) => {
             events.push('quickPick');
             return quickPickSelection ? items.find(quickPickSelection) : items[0];
@@ -237,6 +245,71 @@ async function main() {
         .find((item) => item.label === 'Board & IO');
     assert.ok(provider.getChildren(groupAfterAdd).some((item) => item.label === 'board.h'),
         'adding a header from the Keil group should refresh the tree');
+
+    dialogSelection = vscode.Uri.file(existingStartupPath);
+    await commands.get('project.addFileToGroup')(groupAfterAdd);
+    assert.ok(events.some((value) => value.includes('startup_stm32f103xe.s is already in Target 1 / Application')),
+        'an existing startup assembly file should identify its original group');
+
+    const secondStartupPath = path.join(projectDir, 'startup_extra.S');
+    const assemblerPath = path.join(projectDir, 'board.asm');
+    const hppPath = path.join(testRoot, 'Core', 'Cpp', 'board.hpp');
+    fs.mkdirSync(path.dirname(hppPath), { recursive: true });
+    fs.writeFileSync(secondStartupPath, '; second assembly file\n');
+    fs.writeFileSync(assemblerPath, '; assembly file\n');
+    fs.writeFileSync(hppPath, '#pragma once\n');
+    dialogSelections = [secondStartupPath, assemblerPath, hppPath].map(vscode.Uri.file);
+    const savesBeforeBatch = events.filter((value) => value === 'save').length;
+    await commands.get('project.addFileToGroup')(groupAfterAdd);
+    dialogSelections = undefined;
+    assert.strictEqual(lastOpenDialogOptions.canSelectMany, true,
+        'the Keil group file picker should allow multiple files');
+    assert.ok(lastOpenDialogOptions.filters['Keil project files'].includes('s'),
+        'the file picker should allow assembly sources');
+    assert.strictEqual(events.filter((value) => value === 'save').length, savesBeforeBatch + 1,
+        'one multi-file action should save VS Code files once');
+    const afterBatchXml = fs.readFileSync(projectPath, 'utf8');
+    for (const file of [secondStartupPath, assemblerPath, hppPath]) {
+        assert.ok(afterBatchXml.includes(`<FileName>${path.basename(file)}</FileName>`),
+            `${path.basename(file)} should be added in the same action`);
+    }
+    assert.ok(afterBatchXml.replace(/\\/g, '/').includes(path.relative(projectDir, path.dirname(hppPath)).replace(/\\/g, '/')),
+        'adding an HPP file should add its directory to IncludePath');
+    assert.ok(events.some((value) => value.includes('added 3, already listed 0')),
+        'multi-file addition should report the number added');
+
+    const cppPathToAdd = path.join(testRoot, 'Core', 'Cpp', 'feature.cpp');
+    const libraryPath = path.join(projectDir, 'peripheral.lib');
+    const unsupportedPath = path.join(projectDir, 'notes.txt');
+    fs.writeFileSync(cppPathToAdd, 'void feature() {}\n');
+    fs.writeFileSync(libraryPath, 'test library\n');
+    fs.writeFileSync(unsupportedPath, 'not a Keil source\n');
+    quickPickSelection = (choice) => choice.label === 'Board & IO';
+    await commands.get('project.addFile')(vscode.Uri.file(cppPathToAdd),
+        [cppPathToAdd, libraryPath, unsupportedPath].map(vscode.Uri.file));
+    quickPickSelection = undefined;
+    const afterExplorerBatch = fs.readFileSync(projectPath, 'utf8');
+    assert.ok(afterExplorerBatch.includes('<FileName>feature.cpp</FileName>'));
+    assert.ok(afterExplorerBatch.includes('<FileName>peripheral.lib</FileName>'));
+    assert.ok(!afterExplorerBatch.includes('<FileName>notes.txt</FileName>'));
+    assert.ok(events.some((value) => value.includes('added 2, already listed 0, skipped 1')),
+        'Explorer multi-selection should add supported files and report skipped files');
+
+    const paletteSourcePath = path.join(testRoot, 'Core', 'Src', 'palette.c');
+    const paletteHeaderPath = path.join(testRoot, 'Core', 'MoreHeaders', 'palette.hxx');
+    fs.mkdirSync(path.dirname(paletteHeaderPath), { recursive: true });
+    fs.writeFileSync(paletteSourcePath, 'void palette(void) {}\n');
+    fs.writeFileSync(paletteHeaderPath, '#pragma once\n');
+    dialogSelections = [paletteSourcePath, paletteHeaderPath].map(vscode.Uri.file);
+    quickPickSelection = (choice) => choice.label === 'Board & IO';
+    await commands.get('project.addFile')();
+    quickPickSelection = undefined;
+    dialogSelections = undefined;
+    assert.strictEqual(lastOpenDialogOptions.canSelectMany, true,
+        'Command Palette add-file should open a multi-select file picker');
+    const afterPaletteBatch = fs.readFileSync(projectPath, 'utf8');
+    assert.ok(afterPaletteBatch.includes('<FileName>palette.c</FileName>'));
+    assert.ok(afterPaletteBatch.includes('<FileName>palette.hxx</FileName>'));
 
     const secondHeaderPath = path.join(testRoot, 'Core', 'Inc', 'board2.h');
     fs.writeFileSync(secondHeaderPath, '#pragma once\n');
