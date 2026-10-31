@@ -21,7 +21,7 @@ fs.writeFileSync(projectPath, `<?xml version="1.0" encoding="UTF-8"?>
 <TargetArmAds><Cads><VariousControls><IncludePath marker="keep">../../../../Drivers/Include</IncludePath>
 <Define marker="keep">USE_HAL_DRIVER,STM32F103xE</Define></VariousControls></Cads></TargetArmAds></TargetOption>
 <Groups><Group><GroupName>Application</GroupName><Files><File>
-<FileName>main.c</FileName><FilePath>../../../../Core/Src/main.c</FilePath>
+<FileName>main.c</FileName><FilePath>../../../Core/Src/main.c</FilePath>
 </File><File><FileName>startup_stm32f103xe.s</FileName><FileType>2</FileType>
 <FilePath>startup_stm32f103xe.s</FilePath></File></Files></Group></Groups></Target></Targets></Project>`);
 
@@ -36,7 +36,12 @@ let dialogSelections;
 let lastOpenDialogOptions;
 let quickPickSelection;
 let taskStartError;
+let autoAddEnabled = true;
 const taskEndListeners = new Set();
+const createFileListeners = new Set();
+const saveDocumentListeners = new Set();
+const renameFileListeners = new Set();
+const deleteFileListeners = new Set();
 const outputLines = [];
 childProcess.spawn = (executable, args, options) => {
     const handle = new EventEmitter();
@@ -67,8 +72,25 @@ const vscode = {
         getConfiguration: () => ({ get: (name) => {
             if (name === 'MDK.Uv4Path') { return process.execPath; }
             if (name === 'Project.ExcludeList' || name === 'Project.FileLocationList') { return []; }
+            if (name === 'Project.AutoAddNewFiles') { return autoAddEnabled; }
             return undefined;
         } }),
+        onDidCreateFiles: (listener) => {
+            createFileListeners.add(listener);
+            return { dispose: () => createFileListeners.delete(listener) };
+        },
+        onDidSaveTextDocument: (listener) => {
+            saveDocumentListeners.add(listener);
+            return { dispose: () => saveDocumentListeners.delete(listener) };
+        },
+        onDidRenameFiles: (listener) => {
+            renameFileListeners.add(listener);
+            return { dispose: () => renameFileListeners.delete(listener) };
+        },
+        onDidDeleteFiles: (listener) => {
+            deleteFileListeners.add(listener);
+            return { dispose: () => deleteFileListeners.delete(listener) };
+        },
         saveAll: async () => { events.push('save'); return true; }
     },
     window: {
@@ -130,6 +152,58 @@ const originalLoad = Module._load;
 Module._load = function(request, parent, isMain) {
     return request === 'vscode' ? vscode : originalLoad.call(this, request, parent, isMain);
 };
+
+async function fireCreated(...filePaths) {
+    const event = { files: filePaths.map(vscode.Uri.file) };
+    await Promise.all(Array.from(createFileListeners, (listener) => listener(event)));
+}
+
+async function fireSaved(filePath, isDirty = false) {
+    const document = { uri: vscode.Uri.file(filePath), fileName: filePath, isDirty, isUntitled: false };
+    await Promise.all(Array.from(saveDocumentListeners, (listener) => listener(document)));
+}
+
+async function fireRenamed(oldPath, newPath) {
+    const event = { files: [{ oldUri: vscode.Uri.file(oldPath), newUri: vscode.Uri.file(newPath) }] };
+    await Promise.all(Array.from(renameFileListeners, (listener) => listener(event)));
+}
+
+async function fireDeleted(filePath) {
+    const event = { files: [vscode.Uri.file(filePath)] };
+    await Promise.all(Array.from(deleteFileListeners, (listener) => listener(event)));
+}
+
+async function waitForReference(fileName) {
+    for (let attempt = 0; attempt < 100; attempt++) {
+        const inXml = fs.readFileSync(projectPath, 'utf8').includes(`<FileName>${fileName}</FileName>`);
+        const project = provider?.getChildren().find((item) => item.uvprjFile.path === projectPath);
+        const target = project && provider.getChildren(project)[0];
+        const inTree = target && provider.getChildren(target).some((group) =>
+            provider.getChildren(group).some((source) => source.label === fileName));
+        if (inXml && inTree) { return; }
+        await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    throw new Error(`Automatic addition did not add and display ${fileName}; XML=${referenceCount(fileName)}, ` +
+        `errors=${events.filter((value) => value.startsWith('error:') || value.startsWith('warning:')).slice(-5).join(' | ')}`);
+}
+
+function referenceCount(fileName) {
+    return fs.readFileSync(projectPath, 'utf8').split(`<FileName>${fileName}</FileName>`).length - 1;
+}
+
+async function groupForFile(fileName) {
+    const xml = await require('xml2js').parseStringPromise(fs.readFileSync(projectPath, 'utf8'),
+        { explicitArray: false });
+    const targets = [].concat(xml.Project.Targets.Target || []);
+    for (const target of targets) {
+        for (const group of [].concat(target.Groups?.Group || [])) {
+            for (const file of [].concat(group.Files?.File || [])) {
+                if (file.FileName === fileName) { return group.GroupName; }
+            }
+        }
+    }
+    return undefined;
+}
 
 async function main() {
     const extension = require(path.join(extensionRoot, 'dist', 'src', 'extension'));
@@ -219,6 +293,100 @@ async function main() {
     await commands.get('item.copyValue')();
     assert.ok(events.some((value) => value.includes('Use Copy Value from a Keil project tree item')));
 
+    const sourceDir = path.join(testRoot, 'Core', 'Src');
+    fs.mkdirSync(sourceDir, { recursive: true });
+    fs.writeFileSync(path.join(sourceDir, 'main.c'), 'int main(void) { return 0; }\n');
+    const disabledSourcePath = path.join(sourceDir, 'disabled_auto.c');
+    autoAddEnabled = false;
+    fs.writeFileSync(disabledSourcePath, 'void disabled_auto(void) {}\n');
+    await fireCreated(disabledSourcePath);
+    await fireSaved(disabledSourcePath);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.strictEqual(referenceCount('disabled_auto.c'), 0,
+        'the auto-add setting should prevent an implicit project edit');
+    autoAddEnabled = true;
+
+    const autoSourcePath = path.join(sourceDir, 'auto_unique.c');
+    const quickPicksBeforeAuto = events.filter((value) => value === 'quickPick').length;
+    fs.writeFileSync(autoSourcePath, '');
+    await fireCreated(autoSourcePath);
+    assert.strictEqual(referenceCount('auto_unique.c'), 0,
+        'a newly created empty C file should wait for its first save');
+    fs.writeFileSync(autoSourcePath, 'void auto_unique(void) {}\n');
+    await fireSaved(autoSourcePath);
+    await waitForReference('auto_unique.c');
+    assert.strictEqual(await groupForFile('auto_unique.c'), 'Application',
+        'a directory listed by one group should select that group automatically');
+    assert.strictEqual(events.filter((value) => value === 'quickPick').length, quickPicksBeforeAuto,
+        'a unique directory-to-group match should not ask for a group');
+    await fireSaved(autoSourcePath);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.strictEqual(referenceCount('auto_unique.c'), 1,
+        'saving an automatically added source again must not add another reference');
+
+    const unknownDir = path.join(testRoot, 'Core', 'NewAuto');
+    const unknownPath = path.join(unknownDir, 'auto_unknown_directory.c');
+    fs.mkdirSync(unknownDir, { recursive: true });
+    const quickPicksBeforeUnknown = events.filter((value) => value === 'quickPick').length;
+    fs.writeFileSync(unknownPath, 'void auto_unknown_directory(void) {}\n');
+    await fireCreated(unknownPath);
+    await fireSaved(unknownPath);
+    await waitForReference('auto_unknown_directory.c');
+    assert.strictEqual(events.filter((value) => value === 'quickPick').length, quickPicksBeforeUnknown + 1,
+        'an unrecognized directory should ask once even with a single available group');
+
+    const dirtySavePath = path.join(sourceDir, 'auto_dirty_then_clean.c');
+    fs.writeFileSync(dirtySavePath, '');
+    await fireCreated(dirtySavePath);
+    fs.writeFileSync(dirtySavePath, 'void auto_dirty_then_clean(void) {}\n');
+    await fireSaved(dirtySavePath, true);
+    assert.strictEqual(referenceCount('auto_dirty_then_clean.c'), 0,
+        'a still-dirty save should not add an incomplete file to the project');
+    await fireSaved(dirtySavePath);
+    await waitForReference('auto_dirty_then_clean.c');
+
+    const pendingOldPath = path.join(sourceDir, 'auto_before_rename.c');
+    const pendingNewPath = path.join(sourceDir, 'auto_after_rename.c');
+    fs.writeFileSync(pendingOldPath, '');
+    await fireCreated(pendingOldPath);
+    fs.renameSync(pendingOldPath, pendingNewPath);
+    await fireRenamed(pendingOldPath, pendingNewPath);
+    fs.writeFileSync(pendingNewPath, 'void auto_after_rename(void) {}\n');
+    await fireSaved(pendingNewPath);
+    await waitForReference('auto_after_rename.c');
+    assert.strictEqual(referenceCount('auto_before_rename.c'), 0,
+        'renaming a pending new file must not leave its old name in the project');
+
+    const pendingDeletePath = path.join(sourceDir, 'auto_before_delete.c');
+    fs.writeFileSync(pendingDeletePath, '');
+    await fireCreated(pendingDeletePath);
+    fs.unlinkSync(pendingDeletePath);
+    await fireDeleted(pendingDeletePath);
+    assert.strictEqual(referenceCount('auto_before_delete.c'), 0,
+        'deleting a pending new file must not create a stale project reference');
+
+    const queuedOldPath = path.join(sourceDir, 'auto_queued_old.c');
+    const queuedNewPath = path.join(sourceDir, 'auto_queued_new.c');
+    fs.writeFileSync(queuedOldPath, 'void auto_queued_new(void) {}\n');
+    await fireCreated(queuedOldPath);
+    const queuedSave = fireSaved(queuedOldPath);
+    fs.renameSync(queuedOldPath, queuedNewPath);
+    await fireRenamed(queuedOldPath, queuedNewPath);
+    await queuedSave;
+    await waitForReference('auto_queued_new.c');
+    assert.strictEqual(referenceCount('auto_queued_old.c'), 0,
+        'renaming after the first save but before auto-add must use the new path');
+
+    const queuedDeletePath = path.join(sourceDir, 'auto_queued_delete.c');
+    fs.writeFileSync(queuedDeletePath, 'void auto_queued_delete(void) {}\n');
+    await fireCreated(queuedDeletePath);
+    const deletedSave = fireSaved(queuedDeletePath);
+    fs.unlinkSync(queuedDeletePath);
+    await fireDeleted(queuedDeletePath);
+    await deletedSave;
+    assert.strictEqual(referenceCount('auto_queued_delete.c'), 0,
+        'deleting after the first save but before auto-add must cancel the queued edit');
+
     const newSourcePath = path.join(testRoot, 'Core', 'Src', 'new.c');
     fs.mkdirSync(path.dirname(newSourcePath), { recursive: true });
     fs.writeFileSync(newSourcePath, 'void new_function(void) {}\n');
@@ -236,6 +404,52 @@ async function main() {
     assert.deepStrictEqual(provider.getChildren(createdGroup), [], 'new Keil group should be empty');
     assert.ok(fs.readFileSync(projectPath, 'utf8').includes('<GroupName>Board &amp; IO</GroupName>'));
 
+    const secondGroupMarkerPath = path.join(sourceDir, 'board_group_marker.c');
+    fs.writeFileSync(secondGroupMarkerPath, 'void board_group_marker(void) {}\n');
+    dialogSelection = vscode.Uri.file(secondGroupMarkerPath);
+    await commands.get('project.addFileToGroup')(createdGroup);
+    assert.strictEqual(await groupForFile('board_group_marker.c'), 'Board & IO');
+
+    const ambiguousPath = path.join(sourceDir, 'auto_ambiguous.c');
+    const quickPicksBeforeMapping = events.filter((value) => value === 'quickPick').length;
+    quickPickSelection = (choice) => choice.label === 'Board & IO' || choice.group?.label === 'Board & IO';
+    fs.writeFileSync(ambiguousPath, '');
+    await fireCreated(ambiguousPath);
+    fs.writeFileSync(ambiguousPath, 'void auto_ambiguous(void) {}\n');
+    await fireSaved(ambiguousPath);
+    await waitForReference('auto_ambiguous.c');
+    quickPickSelection = undefined;
+    assert.strictEqual(await groupForFile('auto_ambiguous.c'), 'Board & IO',
+        'the first file in a directory shared by groups should use the selected group');
+    assert.strictEqual(events.filter((value) => value === 'quickPick').length, quickPicksBeforeMapping + 1,
+        'a directory shared by groups should ask once for its default group');
+    assert.ok(state.has('KeilAssistant.AutoAdd.DirectoryMappings'),
+        'the selected directory-to-group mapping should be remembered in workspace state');
+
+    const rememberedPath = path.join(sourceDir, 'auto_remembered.c');
+    const quickPicksBeforeRemembered = events.filter((value) => value === 'quickPick').length;
+    fs.writeFileSync(rememberedPath, '');
+    await fireCreated(rememberedPath);
+    fs.writeFileSync(rememberedPath, 'void auto_remembered(void) {}\n');
+    await fireSaved(rememberedPath);
+    await waitForReference('auto_remembered.c');
+    assert.strictEqual(await groupForFile('auto_remembered.c'), 'Board & IO',
+        'subsequent files in the same directory should use the remembered group');
+    assert.strictEqual(events.filter((value) => value === 'quickPick').length, quickPicksBeforeRemembered,
+        'a remembered directory mapping should not ask again');
+
+    const batchPaths = ['auto_batch_one.c', 'auto_batch_two.c'].map((name) => path.join(sourceDir, name));
+    for (const filePath of batchPaths) { fs.writeFileSync(filePath, ''); }
+    await fireCreated(...batchPaths);
+    for (const filePath of batchPaths) { fs.writeFileSync(filePath, `void ${path.parse(filePath).name}(void) {}\n`); }
+    await Promise.all(batchPaths.map((filePath) => fireSaved(filePath)));
+    for (const filePath of batchPaths) {
+        await waitForReference(path.basename(filePath));
+        assert.strictEqual(referenceCount(path.basename(filePath)), 1,
+            'concurrent first saves should each produce one project reference');
+        assert.strictEqual(await groupForFile(path.basename(filePath)), 'Board & IO');
+    }
+
     const groupedHeaderPath = path.join(testRoot, 'Core', 'Inc', 'board.h');
     fs.mkdirSync(path.dirname(groupedHeaderPath), { recursive: true });
     fs.writeFileSync(groupedHeaderPath, '#pragma once\n');
@@ -245,6 +459,24 @@ async function main() {
         .find((item) => item.label === 'Board & IO');
     assert.ok(provider.getChildren(groupAfterAdd).some((item) => item.label === 'board.h'),
         'adding a header from the Keil group should refresh the tree');
+
+    const autoHeaderPath = path.join(testRoot, 'Core', 'Inc', 'auto_header.h');
+    const quickPicksBeforeHeader = events.filter((value) => value === 'quickPick').length;
+    fs.writeFileSync(autoHeaderPath, '');
+    await fireCreated(autoHeaderPath);
+    fs.writeFileSync(autoHeaderPath, '#pragma once\n');
+    await fireSaved(autoHeaderPath);
+    await waitForReference('auto_header.h');
+    assert.strictEqual(await groupForFile('auto_header.h'), 'Board & IO',
+        'new headers should use the group already associated with their directory');
+    assert.strictEqual(events.filter((value) => value === 'quickPick').length, quickPicksBeforeHeader);
+
+    const unsupportedAutoPath = path.join(testRoot, 'Core', 'Inc', 'auto_notes.txt');
+    fs.writeFileSync(unsupportedAutoPath, 'notes\n');
+    await fireCreated(unsupportedAutoPath);
+    await fireSaved(unsupportedAutoPath);
+    assert.strictEqual(referenceCount('auto_notes.txt'), 0,
+        'non-Keil file types should not be added automatically');
 
     dialogSelection = vscode.Uri.file(existingStartupPath);
     await commands.get('project.addFileToGroup')(groupAfterAdd);
@@ -429,6 +661,38 @@ async function main() {
     dialogSelection = vscode.Uri.file(projectPath);
     await commands.get('explorer.open')();
     assert.strictEqual(provider.getChildren().length, 2, 'two projects should be available for command palette selection');
+    const multiProjectAutoPath = path.join(sourceDir, 'auto_with_two_projects.c');
+    const quickPicksBeforeMultiProject = events.filter((value) => value === 'quickPick').length;
+    fs.writeFileSync(multiProjectAutoPath, '');
+    await fireCreated(multiProjectAutoPath);
+    fs.writeFileSync(multiProjectAutoPath, 'void auto_with_two_projects(void) {}\n');
+    await fireSaved(multiProjectAutoPath);
+    await waitForReference('auto_with_two_projects.c');
+    assert.strictEqual(await groupForFile('auto_with_two_projects.c'), 'Board & IO');
+    assert.strictEqual(events.filter((value) => value === 'quickPick').length, quickPicksBeforeMultiProject,
+        'a remembered directory mapping should resolve the correct project when two are open');
+    assert.ok(!fs.readFileSync(secondPath, 'utf8').includes('<FileName>auto_with_two_projects.c</FileName>'));
+
+    const mappingKey = Object.keys(state.get('KeilAssistant.AutoAdd.DirectoryMappings'))
+        .find((folderPath) => folderPath.toLowerCase() === path.resolve(sourceDir).toLowerCase());
+    assert.ok(mappingKey, 'an ambiguous directory should have a remembered mapping to forget');
+    quickPickSelection = (choice) => choice.label === mappingKey;
+    await commands.get('project.forgetAutoAddFolder')();
+    quickPickSelection = undefined;
+    assert.ok(!Object.prototype.hasOwnProperty.call(state.get('KeilAssistant.AutoAdd.DirectoryMappings'), mappingKey),
+        'forgetting a folder should remove its remembered Keil destination');
+    const afterForgetPath = path.join(sourceDir, 'auto_after_forget.c');
+    const quickPicksBeforeForgetRetry = events.filter((value) => value === 'quickPick').length;
+    quickPickSelection = (choice) => choice.label === 'Board & IO' || choice.group?.label === 'Board & IO';
+    fs.writeFileSync(afterForgetPath, '');
+    await fireCreated(afterForgetPath);
+    fs.writeFileSync(afterForgetPath, 'void auto_after_forget(void) {}\n');
+    await fireSaved(afterForgetPath);
+    await waitForReference('auto_after_forget.c');
+    quickPickSelection = undefined;
+    assert.strictEqual(await groupForFile('auto_after_forget.c'), 'Board & IO');
+    assert.strictEqual(events.filter((value) => value === 'quickPick').length, quickPicksBeforeForgetRetry + 1,
+        'a forgotten ambiguous folder should ask for its group again on the next new file');
     quickPickSelection = (choice) => typeof choice === 'string' || choice.project?.uvprjFile.path === secondPath;
     await commands.get('project.active')();
     await commands.get('project.switch')();
@@ -437,6 +701,17 @@ async function main() {
     assert.deepStrictEqual(provider.getChildren().map((project) => project.uvprjFile.path), [secondPath],
         'command palette close should remove the selected project only');
     quickPickSelection = undefined;
+
+    const staleMappingPath = path.join(sourceDir, 'auto_mapped_project_closed.c');
+    const warningsBeforeStaleMapping = events.filter((value) => value.startsWith('warning:')).length;
+    fs.writeFileSync(staleMappingPath, 'void auto_mapped_project_closed(void) {}\n');
+    await fireCreated(staleMappingPath);
+    await fireSaved(staleMappingPath);
+    assert.strictEqual(referenceCount('auto_mapped_project_closed.c'), 0,
+        'a remembered folder must not be redirected to another open project');
+    assert.ok(!fs.readFileSync(secondPath, 'utf8').includes('<FileName>auto_mapped_project_closed.c</FileName>'));
+    assert.strictEqual(events.filter((value) => value.startsWith('warning:')).length,
+        warningsBeforeStaleMapping + 1, 'an unavailable remembered destination should be reported');
 
     vscode.workspace.workspaceFolders = [];
     await commands.get('project.build')();
@@ -482,7 +757,15 @@ async function main() {
     assert.ok(provider.getChildren(provider.getChildren(c51Project)[0]).some((item) => item.label === 'Board & IO'));
     await commands.get('project.close')();
     c51Project.close();
-    console.log('Smoke test passed: discovery, command palette, task lifecycle, build cwd, IntelliSense, watcher, project editing, close/F7.');
+    const noProjectSource = path.join(sourceDir, 'auto_without_open_project.c');
+    fs.writeFileSync(noProjectSource, 'void auto_without_open_project(void) {}\n');
+    await fireCreated(noProjectSource);
+    await fireSaved(noProjectSource);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.strictEqual(provider.getChildren().length, 0);
+    assert.strictEqual(referenceCount('auto_without_open_project.c'), 0,
+        'automatic addition must not reopen or edit a closed Keil project');
+    console.log('Smoke test passed: discovery, auto-add, command palette, task lifecycle, build cwd, IntelliSense, watcher, project editing, close/F7.');
     await require('./test_project_edit').run(extensionRoot);
 }
 

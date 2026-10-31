@@ -54,6 +54,14 @@ export function activate(context: vscode.ExtensionContext) {
     subscriber.push(vscode.commands.registerCommand('project.addFileToGroup', (item?: FileGroup) => prjExplorer.addFileToGroup(item)));
     subscriber.push(vscode.commands.registerCommand('project.createGroup', (item?: IView) => prjExplorer.createGroup(item)));
     subscriber.push(vscode.commands.registerCommand('project.removeFile', (item?: Source) => prjExplorer.removeFile(item)));
+    subscriber.push(vscode.commands.registerCommand('project.forgetAutoAddFolder', () => prjExplorer.forgetAutoAddFolder()));
+
+    subscriber.push(vscode.workspace.onDidCreateFiles((event) => prjExplorer.trackCreatedFiles(event.files)));
+    subscriber.push(vscode.workspace.onDidRenameFiles((event) => prjExplorer.trackRenamedFiles(event.files)));
+    subscriber.push(vscode.workspace.onDidDeleteFiles((event) => prjExplorer.trackDeletedFiles(event.files)));
+    let initialWorkspaceLoad: Promise<void> = Promise.resolve();
+    subscriber.push(vscode.workspace.onDidSaveTextDocument((document) =>
+        prjExplorer.autoAddSavedFile(document, initialWorkspaceLoad)));
 
     subscriber.push(vscode.commands.registerCommand('project.close', (item?: IView) => prjExplorer.closeProjectFromCommand(item)));
 
@@ -83,7 +91,7 @@ export function activate(context: vscode.ExtensionContext) {
     
     subscriber.push(vscode.commands.registerCommand('project.active', (item?: IView) => prjExplorer.activeProject(item)));
 
-    prjExplorer.loadWorkspace();
+    initialWorkspaceLoad = prjExplorer.loadWorkspace();
 }
 
 export function deactivate() {
@@ -96,6 +104,17 @@ function getMD5(data: string): string {
     const md5 = crypto.createHash('md5');
     md5.update(data);
     return md5.digest('hex');
+}
+
+function normalizedFileKey(path: string): string {
+    const resolved = node_path.resolve(path);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function isPathAtOrUnder(path: string, parent: string): boolean {
+    const childKey = normalizedFileKey(path);
+    const parentKey = normalizedFileKey(parent);
+    return childKey === parentKey || childKey.startsWith(parentKey + node_path.sep);
 }
 
 function expandProjectLocation(location: string, folders: readonly vscode.WorkspaceFolder[]): string {
@@ -1388,12 +1407,34 @@ class ArmTarget extends Target {
 
 //================================================
 
+interface AutoAddDestination {
+    project: KeilProject;
+    target: Target;
+    group: FileGroup;
+}
+
+interface AutoAddDirectoryMapping {
+    projectPath: string;
+    targetName: string;
+    groupName: string;
+}
+
+interface QueuedAutoAdd {
+    path: string;
+    cancelled: boolean;
+}
+
 class ProjectExplorer implements vscode.TreeDataProvider<IView> {
 
     private ItemClickCommand: string = 'Item.Click';
     private readonly savedProjectsKey = 'KeilAssistant.SelectedProjects';
     private readonly discoveryPromptedKey = 'KeilAssistant.DiscoveryPrompted';
+    private readonly autoAddMappingsKey = 'KeilAssistant.AutoAdd.DirectoryMappings';
     private readonly context: vscode.ExtensionContext;
+    private readonly pendingCreatedFiles = new Set<string>();
+    private readonly queuedAutoAdds = new Set<QueuedAutoAdd>();
+    private autoAddQueue: Promise<void> = Promise.resolve();
+    private readonly projectEditQueues = new Map<string, Promise<void>>();
 
     onDidChangeTreeData: vscode.Event<IView | undefined>;
     private viewEvent: vscode.EventEmitter<IView | undefined>;
@@ -1408,6 +1449,205 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
         this.onDidChangeTreeData = this.viewEvent.event;
         context.subscriptions.push(vscode.window.registerTreeDataProvider('project', this));
         context.subscriptions.push(vscode.commands.registerCommand(this.ItemClickCommand, (item) => this.onItemClick(item)));
+    }
+
+    private autoAddEnabled(uri: vscode.Uri): boolean {
+        return vscode.workspace.getConfiguration('KeilAssistant', uri)
+            .get<boolean>('Project.AutoAddNewFiles', true);
+    }
+
+    trackCreatedFiles(files: readonly vscode.Uri[]) {
+        for (const uri of files) {
+            if (uri.scheme === 'file' && getKeilFileType(uri.fsPath) && this.autoAddEnabled(uri)) {
+                this.pendingCreatedFiles.add(normalizedFileKey(uri.fsPath));
+            }
+        }
+    }
+
+    trackRenamedFiles(files: ReadonlyArray<{ oldUri: vscode.Uri; newUri: vscode.Uri }>) {
+        for (const file of files) {
+            if (file.oldUri.scheme !== 'file') { continue; }
+            const oldPath = normalizedFileKey(file.oldUri.fsPath);
+            const newPath = file.newUri.scheme === 'file' ? normalizedFileKey(file.newUri.fsPath) : undefined;
+            for (const pending of Array.from(this.pendingCreatedFiles)) {
+                if (pending !== oldPath && !pending.startsWith(oldPath + node_path.sep)) { continue; }
+                this.pendingCreatedFiles.delete(pending);
+                if (newPath) {
+                    const renamed = newPath + pending.slice(oldPath.length);
+                    if (getKeilFileType(renamed)) { this.pendingCreatedFiles.add(renamed); }
+                }
+            }
+            for (const queued of this.queuedAutoAdds) {
+                const queuedPath = normalizedFileKey(queued.path);
+                if (queuedPath !== oldPath && !queuedPath.startsWith(oldPath + node_path.sep)) { continue; }
+                if (!newPath) { queued.cancelled = true; continue; }
+                const renamed = newPath + queuedPath.slice(oldPath.length);
+                if (getKeilFileType(renamed)) { queued.path = renamed; }
+                else { queued.cancelled = true; }
+            }
+        }
+    }
+
+    trackDeletedFiles(files: readonly vscode.Uri[]) {
+        for (const uri of files) {
+            if (uri.scheme !== 'file') { continue; }
+            const deletedPath = normalizedFileKey(uri.fsPath);
+            for (const pending of Array.from(this.pendingCreatedFiles)) {
+                if (pending === deletedPath || pending.startsWith(deletedPath + node_path.sep)) {
+                    this.pendingCreatedFiles.delete(pending);
+                }
+            }
+            for (const queued of this.queuedAutoAdds) {
+                if (isPathAtOrUnder(queued.path, deletedPath)) { queued.cancelled = true; }
+            }
+        }
+    }
+
+    autoAddSavedFile(document: vscode.TextDocument, initialLoad: Promise<void>): Promise<void> {
+        if (document.uri.scheme !== 'file') { return Promise.resolve(); }
+        const sourcePath = document.uri.fsPath;
+        const key = normalizedFileKey(sourcePath);
+        if (!this.pendingCreatedFiles.has(key) || document.isDirty) { return Promise.resolve(); }
+        this.pendingCreatedFiles.delete(key);
+        if (!this.autoAddEnabled(document.uri)) { return Promise.resolve(); }
+        const queued: QueuedAutoAdd = { path: sourcePath, cancelled: false };
+        this.queuedAutoAdds.add(queued);
+        const task = this.autoAddQueue.then(async () => {
+            try {
+                await initialLoad;
+                if (!queued.cancelled) { await this.addNewSavedFile(queued); }
+            } finally {
+                this.queuedAutoAdds.delete(queued);
+            }
+        });
+        this.autoAddQueue = task.then(() => undefined, (error) => {
+            vscode.window.showErrorMessage(`Could not automatically add ${node_path.basename(queued.path)} to Keil: ${(<Error>error).message}`);
+        });
+        return this.autoAddQueue;
+    }
+
+    private getAutoAddMappings(): Record<string, AutoAddDirectoryMapping> {
+        const stored = this.context.workspaceState.get<Record<string, AutoAddDirectoryMapping>>(this.autoAddMappingsKey, {});
+        return stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
+    }
+
+    async forgetAutoAddFolder() {
+        const mappings = this.getAutoAddMappings();
+        const folders = Object.keys(mappings).sort();
+        if (!folders.length) {
+            vscode.window.showInformationMessage('No automatic Keil folder mappings have been remembered.');
+            return;
+        }
+        const selected = await vscode.window.showQuickPick(folders.map((folder) => ({
+            label: folder,
+            description: `${mappings[folder].projectPath} / ${mappings[folder].targetName} / ${mappings[folder].groupName}`
+        })), { placeHolder: 'Choose a folder mapping to forget' });
+        if (!selected) { return; }
+        const updated = { ...mappings };
+        delete updated[selected.label];
+        await this.context.workspaceState.update(this.autoAddMappingsKey, updated);
+        vscode.window.showInformationMessage(`Forgot the automatic Keil group for ${selected.label}.`);
+    }
+
+    private autoAddChoices(sourcePath: string): { exact: AutoAddDestination[]; related: AutoAddDestination[] } {
+        const directory = normalizedFileKey(node_path.dirname(sourcePath));
+        const sourceWorkspace = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(sourcePath));
+        const isBuildInput = getKeilFileType(sourcePath) !== '5';
+        const exact: AutoAddDestination[] = [];
+        const related: AutoAddDestination[] = [];
+        for (const project of this.prjList.values()) {
+            const projectWorkspace = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(project.uvprjFile.path));
+            const sameWorkspace = !!sourceWorkspace && !!projectWorkspace &&
+                normalizedFileKey(sourceWorkspace.uri.fsPath) === normalizedFileKey(projectWorkspace.uri.fsPath);
+            const insideProjectDirectory = isPathAtOrUnder(sourcePath, project.uvprjFile.dir);
+            for (const target of project.getTargets()) {
+                const inIncludeDirectory = target.getCppConfiguration().includePath.some((includePath) =>
+                    includePath !== '${default}' && normalizedFileKey(includePath) === directory);
+                for (const group of target.getFileGroups()) {
+                    if (isBuildInput && group.excludedFromBuild) { continue; }
+                    const sameSourceDirectory = group.sources.some((source) =>
+                        normalizedFileKey(source.file.dir) === directory);
+                    const choice = { project, target, group };
+                    if (sameSourceDirectory) { exact.push(choice); }
+                    if (sameWorkspace || insideProjectDirectory || inIncludeDirectory || sameSourceDirectory) {
+                        related.push(choice);
+                    }
+                }
+            }
+        }
+        return { exact, related };
+    }
+
+    private async chooseAutoAddDestination(sourcePath: string,
+        queued: QueuedAutoAdd): Promise<AutoAddDestination | undefined> {
+        const directory = normalizedFileKey(node_path.dirname(sourcePath));
+        const { exact, related } = this.autoAddChoices(sourcePath);
+        const mappings = this.getAutoAddMappings();
+        const mapping = mappings[directory];
+        if (!related.length && !mapping) { return undefined; }
+        if (mapping) {
+            const remembered = related.find((choice) =>
+                normalizedFileKey(choice.project.uvprjFile.path) === normalizedFileKey(mapping.projectPath) &&
+                choice.target.targetName === mapping.targetName && choice.group.label === mapping.groupName);
+            if (remembered) { return remembered; }
+            vscode.window.showWarningMessage(`Automatic Keil addition skipped for ${node_path.basename(sourcePath)}: ` +
+                `the remembered group is unavailable. Open ${mapping.projectPath}, or run Forget Auto Add Folder Mapping.`);
+            return undefined;
+        }
+        const choices = exact.length ? exact : related;
+        if (exact.length === 1) { return exact[0]; }
+        const selected = await vscode.window.showQuickPick(choices.map((choice) => ({
+            label: choice.group.label,
+            description: `${choice.project.label} / ${choice.target.targetName} — ${choice.project.uvprjFile.path}`,
+            choice
+        })), { placeHolder: `Choose the Keil group for new files in ${node_path.dirname(sourcePath)}` });
+        if (!selected || queued.cancelled || normalizedFileKey(queued.path) !== normalizedFileKey(sourcePath)) {
+            return undefined;
+        }
+        await this.context.workspaceState.update(this.autoAddMappingsKey, {
+            ...this.getAutoAddMappings(),
+            [directory]: {
+                projectPath: selected.choice.project.uvprjFile.path,
+                targetName: selected.choice.target.targetName,
+                groupName: selected.choice.group.label
+            }
+        });
+        return selected.choice;
+    }
+
+    private async addNewSavedFile(queued: QueuedAutoAdd) {
+        for (let attempt = 0; attempt < 3 && !queued.cancelled; attempt++) {
+            const sourcePath = queued.path;
+            if (!new File(sourcePath).IsFile() || !getKeilFileType(sourcePath)) { return; }
+            const chosen = await this.chooseAutoAddDestination(sourcePath, queued);
+            if (queued.cancelled) { return; }
+            if (normalizedFileKey(queued.path) !== normalizedFileKey(sourcePath)) { continue; }
+            if (!chosen) { return; }
+            const project = this.prjList.get(chosen.project.prjID);
+            const target = project?.getTargetByName(chosen.target.targetName);
+            const group = target?.getFileGroups().find((item) => item.label === chosen.group.label);
+            if (!project || !target || !group || !new File(sourcePath).IsFile()) { return; }
+            const applied = await this.addSelectedFiles(project, target, group, [sourcePath], [], true, queued);
+            if (applied || queued.cancelled) { return; }
+        }
+    }
+
+    private async serializeProjectEdit<T>(project: KeilProject, edit: () => Promise<T>): Promise<T> {
+        const key = project.prjID;
+        const previous = this.projectEditQueues.get(key) || Promise.resolve();
+        let release: () => void = () => {};
+        const gate = new Promise<void>((resolve) => { release = resolve; });
+        this.projectEditQueues.set(key, gate);
+        await previous;
+        try {
+            if (this.prjList.get(key) !== project) {
+                throw new Error('The selected Keil project is no longer open.');
+            }
+            return await edit();
+        } finally {
+            release();
+            if (this.projectEditQueues.get(key) === gate) { this.projectEditQueues.delete(key); }
+        }
     }
 
     async loadWorkspace(forcePrompt: boolean = false) {
@@ -1625,14 +1865,16 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
                 }
             });
             if (name === undefined) { return; }
-            if (!await vscode.workspace.saveAll()) { return; }
-            const result = await createGroupInKeilProject(project.uvprjFile.path, target.targetName, name);
-            if (result.status === 'already-present') {
-                vscode.window.showInformationMessage(`Keil group ${name.trim()} already exists in ${target.targetName}.`);
-            } else {
-                await project.reload();
-                vscode.window.showInformationMessage(`Created Keil group ${name.trim()} in ${target.targetName}.`);
-            }
+            await this.serializeProjectEdit(project, async () => {
+                if (!await vscode.workspace.saveAll()) { return; }
+                const result = await createGroupInKeilProject(project.uvprjFile.path, target.targetName, name);
+                if (result.status === 'already-present') {
+                    vscode.window.showInformationMessage(`Keil group ${name.trim()} already exists in ${target.targetName}.`);
+                } else {
+                    await project.reload();
+                    vscode.window.showInformationMessage(`Created Keil group ${name.trim()} in ${target.targetName}.`);
+                }
+            });
         } catch (error) {
             vscode.window.showErrorMessage(`Could not create the Keil group: ${(<Error>error).message}`);
         }
@@ -1669,16 +1911,19 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
             vscode.window.showWarningMessage('The selected Keil project is no longer open.');
             return;
         }
+        const source = item;
         try {
-            if (!await vscode.workspace.saveAll()) { return; }
-            const result = await removeFileFromKeilProject(project.uvprjFile.path,
-                item.targetName, item.groupName, item.file.path);
-            if (result.status === 'not-present') {
-                vscode.window.showInformationMessage(`${item.label} is no longer in ${item.targetName} / ${item.groupName}.`);
-            } else {
-                await project.reload();
-                vscode.window.showInformationMessage(`Removed ${item.label} from the Keil project. The disk file was kept.`);
-            }
+            await this.serializeProjectEdit(project, async () => {
+                if (!await vscode.workspace.saveAll()) { return; }
+                const result = await removeFileFromKeilProject(project.uvprjFile.path,
+                    source.targetName!, source.groupName!, source.file.path);
+                if (result.status === 'not-present') {
+                    vscode.window.showInformationMessage(`${source.label} is no longer in ${source.targetName} / ${source.groupName}.`);
+                } else {
+                    await project.reload();
+                    vscode.window.showInformationMessage(`Removed ${source.label} from the Keil project. The disk file was kept.`);
+                }
+            });
         } catch (error) {
             vscode.window.showErrorMessage(`Could not remove the file from the Keil project: ${(<Error>error).message}`);
         }
@@ -1719,7 +1964,18 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
     }
 
     private async addSelectedFiles(project: KeilProject, target: Target, group: FileGroup,
-        sourcePaths: string[], initiallySkipped: string[]) {
+        sourcePaths: string[], initiallySkipped: string[], alreadySaved: boolean = false,
+        queued?: QueuedAutoAdd): Promise<boolean> {
+        return this.serializeProjectEdit(project, async () => {
+            if (queued && (queued.cancelled || normalizedFileKey(queued.path) !== normalizedFileKey(sourcePaths[0]) ||
+                !new File(sourcePaths[0]).IsFile())) { return false; }
+            await this.addSelectedFilesNow(project, target, group, sourcePaths, initiallySkipped, alreadySaved);
+            return true;
+        });
+    }
+
+    private async addSelectedFilesNow(project: KeilProject, target: Target, group: FileGroup,
+        sourcePaths: string[], initiallySkipped: string[], alreadySaved: boolean) {
         const skipped = initiallySkipped.slice();
         const paths = sourcePaths.filter((sourcePath) => {
             if (group.excludedFromBuild && getKeilFileType(sourcePath) !== '5') {
@@ -1732,7 +1988,7 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
             vscode.window.showWarningMessage(`No files were added. ${this.reportSkippedFiles(skipped)}`);
             return;
         }
-        if (!await vscode.workspace.saveAll()) { return; }
+        if (!alreadySaved && !await vscode.workspace.saveAll()) { return; }
 
         const results = await addFilesToKeilProject(project.uvprjFile.path, target.targetName, group.label, paths);
         const headerDirs = new Map<string, string>();

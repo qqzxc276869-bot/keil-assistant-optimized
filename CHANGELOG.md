@@ -2,6 +2,16 @@
 
 All notable changes to the "keil-assistant" extension will be documented in this file.
 
+## [v1.7.10] Automatically add new VS Code files
+- Add supported files created in the VS Code Explorer to a loaded Keil project after their first save
+- Suggest a destination from files in the same directory, confirm it the first time for each directory, and remember that mapping
+- Add **Forget Auto Add Folder Mapping** (`project.forgetAutoAddFolder`) to clear a remembered directory mapping from the Command Palette
+- Allow automatic addition to be turned off with `KeilAssistant.Project.AutoAddNewFiles`; direct disk writes from a terminal or external tool do not trigger it, while other extensions using VS Code's edit API may
+- Require VS Code 1.41 or later for the file creation event
+- Keep earlier VSIX packages available in their existing GitHub Releases
+
+***
+
 ## [v1.7.9] Add multiple Keil project files
 - Add saved assembly (`.s` / `.S`, `.asm`, `.a51`, `.a66`), C++, library, and header/include files to a Keil group alongside `.c` and `.h`
 - Allow selecting several files in one file dialog or from a multi-selection in the VS Code Explorer

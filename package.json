@@ -2,7 +2,7 @@
     "name": "keil-assistant-optimized",
     "displayName": "Keil Assistant (Optimized)",
     "description": "Manage and build Keil uVision projects from VS Code",
-    "version": "1.7.9",
+    "version": "1.7.10",
     "publisher": "qqzxc276869-bot",
     "author": {
         "name": "Goal",
@@ -17,7 +17,7 @@
     ],
     "homepage": "https://github.com/qqzxc276869-bot/keil-assistant-optimized",
     "engines": {
-        "vscode": "^1.40.0"
+        "vscode": "^1.41.0"
     },
     "categories": [
         "Programming Languages",
@@ -37,6 +37,7 @@
         "onCommand:project.createGroup",
         "onCommand:project.addFileToGroup",
         "onCommand:project.removeFile",
+        "onCommand:project.forgetAutoAddFolder",
         "onCommand:project.switch",
         "onCommand:project.active",
         "onCommand:project.close",
@@ -82,6 +83,12 @@
                         "scope": "resource",
                         "markdownDescription": "Additional uVision project file paths to load (absolute or relative to the first workspace folder)",
                         "default": []
+                    },
+                    "KeilAssistant.Project.AutoAddNewFiles": {
+                        "type": "boolean",
+                        "scope": "resource",
+                        "markdownDescription": "Automatically add files created in VS Code to a Keil project after their first save. Ambiguous folder mappings are selected once and remembered.",
+                        "default": true
                     }
                 }
             }
@@ -118,6 +125,10 @@
             {
                 "command": "project.removeFile",
                 "title": "Remove File from Keil Project"
+            },
+            {
+                "command": "project.forgetAutoAddFolder",
+                "title": "Forget Auto Add Folder Mapping"
             },
             {
                 "command": "project.switch",
@@ -365,7 +376,7 @@
     },
     "devDependencies": {
         "@types/node": "^12.11.7",
-        "@types/vscode": "1.40.0",
+        "@types/vscode": "1.41.0",
         "@types/xml2js": "^0.4.5",
         "typescript": "^3.6.4"
     },

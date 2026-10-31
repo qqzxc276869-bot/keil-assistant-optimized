@@ -10,14 +10,14 @@
 | --- | --- |
 | 工程发现 | 递归查找工作区内深层 `.uvproj` / `.uvprojx`；多工程可按路径选择，手动选择会被记住；加载时保留外层源码工作区。 |
 | 编译体验 | 编译和重新编译前保存 VS Code 文件，从工程目录调用 `UV4.exe`，检查工具路径；同一工程的编译、重新编译和下载不会重叠运行。 |
-| 工程管理 | 在 VS Code 中新建 Keil 分组、一次添加多个已有的 C/C++、汇编、头文件或库文件、移除工程引用而保留磁盘文件；添加头文件时同步配置该 Target 的头文件目录。 |
+| 工程管理 | 在 VS Code 中新建 Keil 分组、一次添加多个已有的 C/C++、汇编、头文件或库文件、移除工程引用而保留磁盘文件；新建文件可按目录加入工程，添加头文件时同步配置该 Target 的头文件目录。 |
 | 编辑器配置 | 将 C/C++ IntelliSense 配置写入工程所属的 VS Code 工作区，保留已有 JSONC 注释和用户配置。 |
 
 编译和下载仍使用本机安装的 Keil；新建分组和增删工程文件引用可直接在 VS Code 完成。
 
 ## 安装此修改版
 
-从本仓库的 [Releases](https://github.com/qqzxc276869-bot/keil-assistant-optimized/releases) 下载 `.vsix`，在 VS Code 中运行 **Extensions: Install from VSIX...** 选择它。需要 VS Code 1.40 或更新版本。此版的扩展标识为 `qqzxc276869-bot.keil-assistant-optimized`；如果已安装原版 `cl.keil-assistant`，建议先停用原版，避免两个扩展同时响应快捷键和工程视图。
+从本仓库的 [Releases](https://github.com/qqzxc276869-bot/keil-assistant-optimized/releases) 下载 `.vsix`，在 VS Code 中运行 **Extensions: Install from VSIX...** 选择它。需要 VS Code 1.41 或更新版本。已发布的旧版安装包保留在各自的 Release 中，可按需下载。此版的扩展标识为 `qqzxc276869-bot.keil-assistant-optimized`；如果已安装原版 `cl.keil-assistant`，建议先停用原版，避免两个扩展同时响应快捷键和工程视图。
 
 从源码构建：安装 Node.js 和 Python，运行 `npm ci`、`npm run check`、`npm test`，然后运行 `python scripts/package_vsix.py` 生成 VSIX。
 
@@ -44,7 +44,9 @@ Keil Assistant 在 VS Code 中显示 Keil C51/ARM 工程，并通过 Keil uVisio
 
   ![build](./res/preview/build.png)
 
-- **在 VS Code 中把文件加入 Keil 工程**：创建并保存文件后，在 VS Code 资源管理器中选择一个或多个文件，右键选择 **Add File to Keil Project**；也可以从命令面板运行同名命令，在文件选择框中多选。依次选择已加载的 Keil 工程、Target 和分组，插件会一次更新工程文件，无须打开 Keil 单独添加。支持 `.c`、`.cpp`、`.s` / `.S`、`.asm`、`.a51`、`.h`、`.hpp`、`.inc`、`.lib` 等常见 Keil 文件；添加 C/C++ 头文件时，插件会把其所在目录加入所选 Target 的 Keil `IncludePath`（已存在时不会重复添加）。已有工程引用会提示所在分组，不会重复写入。
+- **新建文件自动加入 Keil 工程**：在 VS Code 资源管理器中新建受支持的文件并首次保存后，插件按文件所在目录确定已加载的 Keil 工程、Target 和分组。如果工程中还没有该目录的文件，或该目录同时用于多个分组，首次选择后会记住归属，以后在该目录新建文件无须再次手动添加。需要更换分组时，在命令面板运行 **Forget Auto Add Folder Mapping**，选择已记住的目录清除映射；下次在该目录新建文件时可重新选择。终端或外部工具直接写入磁盘的文件不会触发此流程；VS Code 内的文件操作，包括其他扩展通过其编辑 API 创建的文件，可能触发。可以通过 `KeilAssistant.Project.AutoAddNewFiles` 关闭自动添加；已有文件仍可用下面的手动命令添加。
+
+- **手动把已有文件加入 Keil 工程**：在 VS Code 资源管理器中选择一个或多个文件，右键选择 **Add File to Keil Project**；也可以从命令面板运行同名命令，在文件选择框中多选。依次选择已加载的 Keil 工程、Target 和分组，插件会一次更新工程文件，无须打开 Keil 单独添加。支持 `.c`、`.cpp`、`.s` / `.S`、`.asm`、`.a51`、`.h`、`.hpp`、`.inc`、`.lib` 等常见 Keil 文件；添加 C/C++ 头文件时，插件会把其所在目录加入所选 Target 的 Keil `IncludePath`（已存在时不会重复添加）。已有工程引用会提示所在分组，不会重复写入。
 
 - **直接管理 Keil 工程树**：在插件的工程树中右键工程或 Target，选择 **New Keil Group** 创建分组；右键分组选择 **Add File to Keil Group**，从磁盘多选已有文件；右键分组中的文件选择 **Remove File from Keil Project**，只从所选 Target 的工程分组移除引用，磁盘上的文件仍保留。这些命令也能从命令面板运行，插件会提示选择工程、分组或文件。VS Code 自带资源管理器中的 **删除** 是另一项操作，会删除磁盘文件。
 
@@ -70,6 +72,7 @@ Keil Assistant 在 VS Code 中显示 Keil C51/ARM 工程，并通过 Keil uVisio
 
 ## 其他设置
 
+- `KeilAssistant.Project.AutoAddNewFiles`：默认开启。VS Code 内新建并首次保存受支持文件时，按目录自动加入 Keil 工程；可关闭该功能，继续使用手动添加命令。
 - `KeilAssistant.Project.ExcludeList`：排除不需要发现的工程文件；可填写文件名或相对于工作区的路径，默认值为空列表 `[]`。
 - `KeilAssistant.Project.FileLocationList`：可选，填写要加载的工程文件路径，用于明确指定工作区外或不便扫描的工程。
 
