@@ -270,7 +270,7 @@ async function main() {
     await commands.get('project.rebuild')();
     await commands.get('project.download')();
     assert.strictEqual(taskCount(), firstTaskCount, 'rebuild and download must wait while a build owns the shared log');
-    assert.ok(events.some((value) => value.startsWith('warning:Keil build is still running')));
+    assert.ok(events.some((value) => value.startsWith('warning:Keil 工程 ') && value.includes('正在编译')));
     await projects[0].reload();
     await commands.get('project.build')(projects[0]);
     assert.strictEqual(taskCount(), firstTaskCount, 'a project reload must not release a still-running task lock');
@@ -282,7 +282,7 @@ async function main() {
     taskStartError = new Error('test task start failure');
     await commands.get('project.build')();
     await new Promise((resolve) => setImmediate(resolve));
-    assert.ok(events.some((value) => value.includes('failed to start: test task start failure')));
+    assert.ok(events.some((value) => value.includes('Keil 编译启动失败：test task start failure')));
     assert.strictEqual(taskEndListeners.size, 0, 'failed start should dispose its task listener');
     const countAfterFailure = taskCount();
     await commands.get('project.build')();
@@ -291,7 +291,7 @@ async function main() {
     await commands.get('project.active')();
     await commands.get('project.switch')();
     await commands.get('item.copyValue')();
-    assert.ok(events.some((value) => value.includes('Use Copy Value from a Keil project tree item')));
+    assert.ok(events.some((value) => value.includes('请在 Keil 工程树中选择条目后使用“复制条目内容”。')));
 
     const sourceDir = path.join(testRoot, 'Core', 'Src');
     fs.mkdirSync(sourceDir, { recursive: true });
@@ -480,7 +480,7 @@ async function main() {
 
     dialogSelection = vscode.Uri.file(existingStartupPath);
     await commands.get('project.addFileToGroup')(groupAfterAdd);
-    assert.ok(events.some((value) => value.includes('startup_stm32f103xe.s is already in Target 1 / Application')),
+    assert.ok(events.some((value) => value.includes('startup_stm32f103xe.s 已在 Target 1 / Application 分组中')),
         'an existing startup assembly file should identify its original group');
 
     const secondStartupPath = path.join(projectDir, 'startup_extra.S');
@@ -496,7 +496,7 @@ async function main() {
     dialogSelections = undefined;
     assert.strictEqual(lastOpenDialogOptions.canSelectMany, true,
         'the Keil group file picker should allow multiple files');
-    assert.ok(lastOpenDialogOptions.filters['Keil project files'].includes('s'),
+    assert.ok(Object.values(lastOpenDialogOptions.filters).some((extensions) => extensions.includes('s')),
         'the file picker should allow assembly sources');
     assert.strictEqual(events.filter((value) => value === 'save').length, savesBeforeBatch + 1,
         'one multi-file action should save VS Code files once');
@@ -507,7 +507,7 @@ async function main() {
     }
     assert.ok(afterBatchXml.replace(/\\/g, '/').includes(path.relative(projectDir, path.dirname(hppPath)).replace(/\\/g, '/')),
         'adding an HPP file should add its directory to IncludePath');
-    assert.ok(events.some((value) => value.includes('added 3, already listed 0')),
+    assert.ok(events.some((value) => value.includes('新增 3 个，已存在 0 个')),
         'multi-file addition should report the number added');
 
     const cppPathToAdd = path.join(testRoot, 'Core', 'Cpp', 'feature.cpp');
@@ -524,7 +524,7 @@ async function main() {
     assert.ok(afterExplorerBatch.includes('<FileName>feature.cpp</FileName>'));
     assert.ok(afterExplorerBatch.includes('<FileName>peripheral.lib</FileName>'));
     assert.ok(!afterExplorerBatch.includes('<FileName>notes.txt</FileName>'));
-    assert.ok(events.some((value) => value.includes('added 2, already listed 0, skipped 1')),
+    assert.ok(events.some((value) => value.includes('新增 2 个，已存在 0 个') && value.includes('跳过 1 个')),
         'Explorer multi-selection should add supported files and report skipped files');
 
     const paletteSourcePath = path.join(testRoot, 'Core', 'Src', 'palette.c');
@@ -726,13 +726,13 @@ async function main() {
     latestProcess.handle.emit('close', 3, null);
     assert.ok(outputLines.join('').includes('stdout sample'));
     assert.ok(outputLines.join('').includes('stderr sample'));
-    assert.ok(outputLines.join('').includes('exited with code 3'));
+    assert.ok(outputLines.join('').includes('退出码 3'));
     await commands.get('project.download')();
     assert.strictEqual(processCount(), initialProcessCount + 1, 'process close should release the no-workspace task lock');
     latestProcess.handle.emit('close', 0, null);
     await commands.get('project.build')();
     latestProcess.handle.emit('error', new Error('test process start failure'));
-    assert.ok(events.some((value) => value.includes('failed to start: test process start failure')));
+    assert.ok(events.some((value) => value.includes('Keil 编译启动失败：test process start failure')));
     const countAfterProcessError = processCount();
     await commands.get('project.build')();
     assert.strictEqual(processCount(), countAfterProcessError + 1, 'process error should release the no-workspace task lock');

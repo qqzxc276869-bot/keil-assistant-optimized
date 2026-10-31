@@ -2,6 +2,15 @@
 
 All notable changes to the "keil-assistant" extension will be documented in this file.
 
+## [v1.7.11] Chinese interface text
+- Translate Keil command titles, context menus, settings, and project view labels into Chinese, including **从 Keil 工程移除文件引用** and **清除自动添加的文件夹分组记录**
+- Translate runtime notifications, file and group selection prompts, project-editing and C/C++ configuration errors, and A51 completion descriptions
+- Place the folder-mapping reset command in the Keil project view's `…` menu as well as the Command Palette
+- Update the Chinese and English instructions to use the displayed command names
+- Preserve the earlier VSIX packages and GitHub releases
+
+***
+
 ## [v1.7.10] Automatically add new VS Code files
 - Add supported files created in the VS Code Explorer to a loaded Keil project after their first save
 - Suggest a destination from files in the same directory, confirm it the first time for each directory, and remember that mapping

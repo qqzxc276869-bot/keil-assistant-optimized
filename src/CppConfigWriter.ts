@@ -24,7 +24,7 @@ function assertUniqueProperties(node: Node): void {
         for (const property of node.children || []) {
             const key = property.children && property.children[0] && property.children[0].value;
             if (typeof key !== 'string') { continue; }
-            if (seen.has(key)) { throw new Error(`c_cpp_properties.json has a duplicate JSONC key: ${key}`); }
+            if (seen.has(key)) { throw new Error(`c_cpp_properties.json 中有重复的 JSONC 键：${key}`); }
             seen.add(key);
         }
     }
@@ -36,7 +36,7 @@ export function updateCppConfigurationsText(existing: string | undefined, config
     const requestedNames = new Set<string>();
     for (const configuration of configurations) {
         if (requestedNames.has(configuration.name)) {
-            throw new Error(`Duplicate Keil C/C++ configuration name: ${configuration.name}`);
+            throw new Error(`Keil C/C++ 配置名称重复：${configuration.name}`);
         }
         requestedNames.add(configuration.name);
     }
@@ -52,7 +52,7 @@ export function updateCppConfigurationsText(existing: string | undefined, config
     const document = tree && getNodeValue(tree);
     if (errors.length || !document || typeof document !== 'object' || Array.isArray(document) ||
         !Array.isArray(document.configurations)) {
-        throw new Error('c_cpp_properties.json has invalid JSONC or no configurations array');
+        throw new Error('c_cpp_properties.json 的 JSONC 格式无效，或缺少 configurations 数组');
     }
 
     const eol = input.includes('\r\n') ? '\r\n' : '\n';
@@ -64,7 +64,7 @@ export function updateCppConfigurationsText(existing: string | undefined, config
         const matches = items.map((item, index) => item && item.name === configuration.name ? index : -1)
             .filter((index) => index >= 0);
         if (matches.length > 1) {
-            throw new Error(`c_cpp_properties.json has duplicate configurations named ${configuration.name}`);
+            throw new Error(`c_cpp_properties.json 中存在同名配置：${configuration.name}`);
         }
         const index = matches.length ? matches[0] : -1;
         if (index < 0) {

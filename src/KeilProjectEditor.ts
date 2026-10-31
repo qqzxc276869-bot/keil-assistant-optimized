@@ -50,7 +50,7 @@ function findTagEnd(xml: string, start: number): number {
             return i;
         }
     }
-    throw new Error('The Keil project contains an unfinished XML tag.');
+    throw new Error('Keil 工程包含未结束的 XML 标签。');
 }
 
 // Locate only element boundaries. xml2js validates and interprets the XML;
@@ -65,18 +65,18 @@ function scanElements(xml: string): XmlElement[] {
         if (xml.startsWith('<!--', start) || xml.startsWith('<![CDATA[', start)) {
             const marker = xml.startsWith('<!--', start) ? '-->' : ']]>';
             const end = xml.indexOf(marker, start + 4);
-            if (end < 0) { throw new Error('The Keil project contains unfinished XML markup.'); }
+            if (end < 0) { throw new Error('Keil 工程包含未结束的 XML 标记。'); }
             cursor = end + marker.length;
             continue;
         }
         if (xml.startsWith('<?', start)) {
             const end = xml.indexOf('?>', start + 2);
-            if (end < 0) { throw new Error('The Keil project contains unfinished XML markup.'); }
+            if (end < 0) { throw new Error('Keil 工程包含未结束的 XML 标记。'); }
             cursor = end + 2;
             continue;
         }
         if (xml.startsWith('<!', start)) {
-            throw new Error('This Keil project uses unsupported XML declarations; it was not changed.');
+            throw new Error('Keil 工程使用了不支持的 XML 声明，未进行修改。');
         }
 
         const tagEnd = findTagEnd(xml, start);
@@ -85,13 +85,13 @@ function scanElements(xml: string): XmlElement[] {
             const name = tag.slice(1).trim();
             const current = stack.pop();
             if (!current || current.name !== name) {
-                throw new Error('The Keil project has mismatched XML elements.');
+                throw new Error('Keil 工程的 XML 节点不匹配。');
             }
             current.closeStart = start;
             current.end = tagEnd + 1;
         } else {
             const match = /^([A-Za-z_][\w:.-]*)/.exec(tag);
-            if (!match) { throw new Error('The Keil project contains an invalid XML element.'); }
+            if (!match) { throw new Error('Keil 工程包含无效的 XML 节点。'); }
             const element: XmlElement = {
                 name: match[1], start, openEnd: tagEnd + 1, closeStart: tagEnd + 1,
                 end: tagEnd + 1, selfClosing: /\/\s*$/.test(tag), children: []
@@ -102,7 +102,7 @@ function scanElements(xml: string): XmlElement[] {
         }
         cursor = tagEnd + 1;
     }
-    if (stack.length) { throw new Error('The Keil project contains unclosed XML elements.'); }
+    if (stack.length) { throw new Error('Keil 工程包含未关闭的 XML 节点。'); }
     return roots;
 }
 
@@ -113,7 +113,7 @@ function direct(parent: XmlElement, name: string): XmlElement[] {
 function one(parent: XmlElement, name: string): XmlElement {
     const found = direct(parent, name);
     if (found.length !== 1) {
-        throw new Error(`Expected one <${name}> element in the Keil project.`);
+        throw new Error(`Keil 工程中需要且只能有一个 <${name}> 节点。`);
     }
     return found[0];
 }
@@ -174,7 +174,7 @@ function readUtf8Project(projectPath: string): { buffer: Buffer, xml: string } {
     const xml = buffer.toString('utf8');
     const declaration = /^\uFEFF?<\?xml[^?]*encoding\s*=\s*["']([^"']+)["']/i.exec(xml);
     if (!buffersEqual(Buffer.from(xml, 'utf8'), buffer) || (declaration && !/^utf-?8$/i.test(declaration[1]))) {
-        throw new Error('The Keil project is not UTF-8; it was not changed.');
+        throw new Error('Keil 工程不是 UTF-8 编码，未进行修改。');
     }
     return { buffer, xml };
 }
@@ -184,7 +184,7 @@ function writeProjectChange(projectPath: string, original: Buffer, updated: stri
     try {
         fs.writeFileSync(temporaryPath, updated, { encoding: 'utf8', flag: 'wx' });
         if (!buffersEqual(fs.readFileSync(projectPath), original)) {
-            throw new Error('The Keil project changed while editing it. Retry the command.');
+            throw new Error('编辑期间 Keil 工程发生变化，请重试。');
         }
         fs.renameSync(temporaryPath, projectPath);
     } finally {
@@ -194,14 +194,14 @@ function writeProjectChange(projectPath: string, original: Buffer, updated: stri
 
 function projectRoot(xml: string): XmlElement {
     const root = scanElements(xml).find((element) => element.name === 'Project');
-    if (!root) { throw new Error('The Keil project has no <Project> element.'); }
+    if (!root) { throw new Error('Keil 工程中缺少 <Project> 节点。'); }
     return root;
 }
 
 function targetElement(xml: string, targetCount: number, targetIndex: number): XmlElement {
     const targets = direct(one(projectRoot(xml), 'Targets'), 'Target');
     if (targets.length !== targetCount || !targets[targetIndex]) {
-        throw new Error('The Keil target structure could not be matched safely.');
+        throw new Error('无法安全地匹配 Keil 编译目标结构。');
     }
     return targets[targetIndex];
 }
@@ -223,10 +223,10 @@ export async function addFilesToKeilProject(projectPath: string, targetName: str
     const sources = sourcePaths.map((sourcePath) => {
         const fileType = getKeilFileType(sourcePath);
         if (!fileType) {
-            throw new Error(`Unsupported Keil file type: ${node_path.basename(sourcePath)}`);
+            throw new Error(`不支持的 Keil 文件类型：${node_path.basename(sourcePath)}`);
         }
         if (!fs.existsSync(sourcePath) || !fs.statSync(sourcePath).isFile()) {
-            throw new Error(`The source file does not exist: ${sourcePath}`);
+            throw new Error(`源文件不存在：${sourcePath}`);
         }
         return { path: node_path.resolve(sourcePath), fileType };
     });
@@ -236,12 +236,12 @@ export async function addFilesToKeilProject(projectPath: string, targetName: str
     const document = await parser.parseStringPromise(xml);
     const targetData = asArray<any>(document.Project && document.Project.Targets && document.Project.Targets.Target);
     const targetIndex = targetData.findIndex((target) => target.TargetName === targetName);
-    if (targetIndex < 0) { throw new Error(`Keil target not found: ${targetName}`); }
+    if (targetIndex < 0) { throw new Error(`找不到 Keil 编译目标：${targetName}`); }
     const target = targetData[targetIndex];
     const groupData = asArray<any>(target.Groups && target.Groups.Group);
     const matchingGroups = groupData.map((group, index) => group.GroupName === groupName ? index : -1)
         .filter((index) => index >= 0);
-    if (matchingGroups.length !== 1) { throw new Error(`Keil group is missing or ambiguous: ${groupName}`); }
+    if (matchingGroups.length !== 1) { throw new Error(`Keil 分组不存在或名称不唯一：${groupName}`); }
     const groupIndex = matchingGroups[0];
 
     const knownFiles = new Map<string, string>();
@@ -273,7 +273,7 @@ export async function addFilesToKeilProject(projectPath: string, targetName: str
 
     const groupElements = direct(one(targetElement(xml, targetData.length, targetIndex), 'Groups'), 'Group');
     if (groupElements.length !== groupData.length) {
-        throw new Error('The Keil group structure could not be matched safely.');
+        throw new Error('无法安全地匹配 Keil 分组结构。');
     }
     const groupElement = groupElements[groupIndex];
     const groupNameElement = one(groupElement, 'GroupName');
@@ -282,7 +282,7 @@ export async function addFilesToKeilProject(projectPath: string, targetName: str
     const groupIndent = lineIndent(xml, groupElement.start) || '';
     const filesElement = direct(groupElement, 'Files')[0];
     if (direct(groupElement, 'Files').length > 1) {
-        throw new Error('The selected Keil group contains multiple <Files> elements.');
+        throw new Error('所选 Keil 分组包含多个 <Files> 节点。');
     }
     const filesIndent = filesElement ? (lineIndent(xml, filesElement.start) || groupIndent + unit) : groupIndent + unit;
     const existingFile = filesElement && direct(filesElement, 'File')[0];
@@ -316,7 +316,7 @@ export async function addFilesToKeilProject(projectPath: string, targetName: str
         const storedPath = node_path.relative(projectDir, source.path).replace(/\//g, '\\');
         if (!afterFiles.some((file) => file.FileName === node_path.basename(source.path) &&
             file.FileType === source.fileType && file.FilePath === storedPath)) {
-            throw new Error('The changed Keil project could not be verified; it was not saved.');
+            throw new Error('无法验证修改后的 Keil 工程，未保存更改。');
         }
     }
 
@@ -336,14 +336,14 @@ export async function createGroupInKeilProject(projectPath: string, targetName: 
     groupName: string): Promise<ProjectEditResult> {
     const name = groupName.trim();
     if (!name || /[\u0000-\u001f]/.test(name)) {
-        throw new Error('Enter a non-empty Keil group name without control characters.');
+        throw new Error('Keil 分组名不能为空，也不能包含控制字符。');
     }
     const { buffer, xml } = readUtf8Project(projectPath);
     const parser = new xml2js.Parser({ explicitArray: false });
     const document = await parser.parseStringPromise(xml);
     const targets = asArray<any>(document.Project && document.Project.Targets && document.Project.Targets.Target);
     const targetIndex = targets.findIndex((target) => target.TargetName === targetName);
-    if (targetIndex < 0) { throw new Error(`Keil target not found: ${targetName}`); }
+    if (targetIndex < 0) { throw new Error(`找不到 Keil 编译目标：${targetName}`); }
     const groups = asArray<any>(targets[targetIndex].Groups && targets[targetIndex].Groups.Group);
     if (groups.some((group) => group.GroupName === name)) {
         return { status: 'already-present' };
@@ -355,10 +355,10 @@ export async function createGroupInKeilProject(projectPath: string, targetName: 
     const unit = indentUnit(xml, target, targetNameElement);
     const targetIndent = lineIndent(xml, target.start) || '';
     const groupsElements = direct(target, 'Groups');
-    if (groupsElements.length > 1) { throw new Error('The Keil target contains multiple <Groups> elements.'); }
+    if (groupsElements.length > 1) { throw new Error('Keil 编译目标包含多个 <Groups> 节点。'); }
     const groupsElement = groupsElements[0];
     if (groupsElement && direct(groupsElement, 'Group').length !== groups.length) {
-        throw new Error('The Keil group structure could not be matched safely.');
+        throw new Error('无法安全地匹配 Keil 分组结构。');
     }
     const groupsIndent = groupsElement ? (lineIndent(xml, groupsElement.start) || targetIndent + unit) : targetIndent + unit;
     const firstGroup = groupsElement && direct(groupsElement, 'Group')[0];
@@ -381,7 +381,7 @@ export async function createGroupInKeilProject(projectPath: string, targetName: 
     const afterTargets = asArray<any>(after.Project.Targets.Target);
     const afterGroups = asArray<any>(afterTargets[targetIndex].Groups.Group);
     if (afterGroups.length !== groups.length + 1 || !afterGroups.some((group) => group.GroupName === name)) {
-        throw new Error('The new Keil group could not be verified; the project was not saved.');
+        throw new Error('无法验证新建的 Keil 分组，工程未保存。');
     }
     writeProjectChange(projectPath, buffer, updated);
     return { status: 'created' };
@@ -395,14 +395,14 @@ export async function removeFileFromKeilProject(projectPath: string, targetName:
     const document = await parser.parseStringPromise(xml);
     const targets = asArray<any>(document.Project && document.Project.Targets && document.Project.Targets.Target);
     const targetIndex = targets.findIndex((target) => target.TargetName === targetName);
-    if (targetIndex < 0) { throw new Error(`Keil target not found: ${targetName}`); }
+    if (targetIndex < 0) { throw new Error(`找不到 Keil 编译目标：${targetName}`); }
     const groups = asArray<any>(targets[targetIndex].Groups && targets[targetIndex].Groups.Group);
     const groupIndexes = groups.map((group, index) => group.GroupName === groupName ? index : -1)
         .filter((index) => index >= 0);
-    if (groupIndexes.length !== 1) { throw new Error(`Keil group is missing or ambiguous: ${groupName}`); }
+    if (groupIndexes.length !== 1) { throw new Error(`Keil 分组不存在或名称不唯一：${groupName}`); }
     const groupIndex = groupIndexes[0];
     const filesData = asArray<any>(groups[groupIndex].Files);
-    if (filesData.length > 1) { throw new Error('The selected group contains multiple <Files> elements.'); }
+    if (filesData.length > 1) { throw new Error('所选分组包含多个 <Files> 节点。'); }
     const entries = filesData.length ? asArray<any>(filesData[0].File) : [];
     const projectDir = node_path.dirname(projectPath);
     const sourceKey = projectPathKey(projectDir, sourcePath);
@@ -410,17 +410,17 @@ export async function removeFileFromKeilProject(projectPath: string, targetName:
         typeof file.FilePath === 'string' && projectPathKey(projectDir, file.FilePath) === sourceKey ? index : -1)
         .filter((index) => index >= 0);
     if (matches.length === 0) { return { status: 'not-present' }; }
-    if (matches.length > 1) { throw new Error('The selected group has duplicate references to this file.'); }
+    if (matches.length > 1) { throw new Error('所选分组中存在该文件的重复引用。'); }
 
     const target = targetElement(xml, targets.length, targetIndex);
     const groupElements = direct(one(target, 'Groups'), 'Group');
     if (groupElements.length !== groups.length) {
-        throw new Error('The Keil group structure could not be matched safely.');
+        throw new Error('无法安全地匹配 Keil 分组结构。');
     }
     const filesElement = one(groupElements[groupIndex], 'Files');
     const fileElements = direct(filesElement, 'File');
     if (fileElements.length !== entries.length) {
-        throw new Error('The Keil file structure could not be matched safely.');
+        throw new Error('无法安全地匹配 Keil 文件结构。');
     }
     const range = elementRemovalRange(xml, fileElements[matches[0]]);
     const updated = xml.slice(0, range.start) + xml.slice(range.end);
@@ -432,7 +432,7 @@ export async function removeFileFromKeilProject(projectPath: string, targetName:
     const afterEntries = afterFilesData.length ? asArray<any>(afterFilesData[0].File) : [];
     if (afterEntries.some((file) => typeof file.FilePath === 'string' &&
         projectPathKey(projectDir, file.FilePath) === sourceKey)) {
-        throw new Error('The removed Keil file could not be verified; the project was not saved.');
+        throw new Error('无法验证已移除的 Keil 文件引用，工程未保存。');
     }
     writeProjectChange(projectPath, buffer, updated);
     return { status: 'removed' };
@@ -444,7 +444,7 @@ function includePathText(value: any): string {
         return value._ || '';
     }
     if (value === undefined) { return ''; }
-    throw new Error('The selected Keil include path has unsupported XML content.');
+    throw new Error('所选 Keil 头文件路径包含不支持的 XML 内容。');
 }
 
 /** Add an existing directory to one target's compiler include paths. Other targets are untouched. */
@@ -452,12 +452,12 @@ export async function addIncludeDirectoryToKeilProject(projectPath: string, targ
     includeDir: string): Promise<ProjectEditResult> {
     const absoluteDir = node_path.resolve(includeDir);
     if (!fs.statSync(absoluteDir).isDirectory()) {
-        throw new Error(`The include path is not a directory: ${includeDir}`);
+        throw new Error(`头文件路径不是文件夹：${includeDir}`);
     }
     const projectDir = node_path.dirname(projectPath);
     const storedPath = node_path.relative(projectDir, absoluteDir).replace(/\//g, '\\') || '.';
     if (/[;\u0000-\u001f]/.test(storedPath)) {
-        throw new Error('The include directory cannot be represented in a Keil include path list.');
+        throw new Error('该文件夹无法写入 Keil 头文件搜索路径列表。');
     }
 
     const { buffer, xml } = readUtf8Project(projectPath);
@@ -467,7 +467,7 @@ export async function addIncludeDirectoryToKeilProject(projectPath: string, targ
     const matchingTargets = targets.map((target, index) => target.TargetName === targetName ? index : -1)
         .filter((index) => index >= 0);
     if (matchingTargets.length !== 1) {
-        throw new Error(`Keil target is missing or ambiguous: ${targetName}`);
+        throw new Error(`Keil 编译目标不存在或名称不唯一：${targetName}`);
     }
     const targetIndex = matchingTargets[0];
     const targetData = targets[targetIndex];
@@ -475,7 +475,7 @@ export async function addIncludeDirectoryToKeilProject(projectPath: string, targ
     const armCads = optionData && optionData.TargetArmAds && optionData.TargetArmAds.Cads;
     const c51Cads = optionData && optionData.Target51 && optionData.Target51.C51;
     if ((armCads === undefined) === (c51Cads === undefined)) {
-        throw new Error('The selected Keil target has no unambiguous C compiler options.');
+        throw new Error('所选 Keil 目标的 C 编译器选项不存在或不唯一。');
     }
     const isArm = armCads !== undefined;
     const cadsData = isArm ? armCads : c51Cads;
@@ -494,12 +494,12 @@ export async function addIncludeDirectoryToKeilProject(projectPath: string, targ
     const cads = one(compiler, isArm ? 'Cads' : 'C51');
     const variousElements = direct(cads, 'VariousControls');
     if (variousElements.length > 1) {
-        throw new Error('The selected Keil compiler contains multiple <VariousControls> elements.');
+        throw new Error('所选 Keil 编译器包含多个 <VariousControls> 节点。');
     }
     const various = variousElements[0];
     const includeElements = various ? direct(various, 'IncludePath') : [];
     if (includeElements.length > 1) {
-        throw new Error('The selected Keil target contains multiple <IncludePath> elements.');
+        throw new Error('所选 Keil 编译目标包含多个 <IncludePath> 节点。');
     }
     const includeElement = includeElements[0];
     const eol = xml.includes('\r\n') ? '\r\n' : '\n';
@@ -507,7 +507,7 @@ export async function addIncludeDirectoryToKeilProject(projectPath: string, targ
     let updated: string;
     if (includeElement) {
         if (includeElement.children.length) {
-            throw new Error('The selected Keil include path has unsupported XML content.');
+            throw new Error('所选 Keil 头文件路径包含不支持的 XML 内容。');
         }
         if (includeElement.selfClosing) {
             const opening = xml.slice(includeElement.start, includeElement.openEnd).replace(/\s*\/\s*>$/, '>');
@@ -516,7 +516,7 @@ export async function addIncludeDirectoryToKeilProject(projectPath: string, targ
         } else {
             const content = xml.slice(includeElement.openEnd, includeElement.closeStart);
             if (content.includes('<')) {
-                throw new Error('The selected Keil include path has unsupported XML content.');
+                throw new Error('所选 Keil 头文件路径包含不支持的 XML 内容。');
             }
             const trailing = /[ \t\r\n]*$/.exec(content)![0];
             const body = content.slice(0, content.length - trailing.length);
@@ -556,7 +556,7 @@ export async function addIncludeDirectoryToKeilProject(projectPath: string, targ
         afterTargets[targetIndex].TargetName !== targetName ||
         afterPath.split(';').filter((entry) => entry.trim() &&
             projectPathKey(projectDir, entry.trim()) === desiredKey).length !== 1) {
-        throw new Error('The changed Keil include path could not be verified; the project was not saved.');
+        throw new Error('无法验证修改后的 Keil 头文件路径，工程未保存。');
     }
     writeProjectChange(projectPath, buffer, updated);
     return { status: 'created' };

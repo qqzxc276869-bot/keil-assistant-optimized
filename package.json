@@ -1,8 +1,8 @@
 {
     "name": "keil-assistant-optimized",
-    "displayName": "Keil Assistant (Optimized)",
-    "description": "Manage and build Keil uVision projects from VS Code",
-    "version": "1.7.10",
+    "displayName": "Keil 助手（优化版）",
+    "description": "在 VS Code 中管理和编译 Keil uVision 工程",
+    "version": "1.7.11",
     "publisher": "qqzxc276869-bot",
     "author": {
         "name": "Goal",
@@ -58,36 +58,36 @@
     "contributes": {
         "configuration": [
             {
-                "title": "Keil Assistant",
+                "title": "Keil 助手",
                 "properties": {
                     "KeilAssistant.C51.Uv4Path": {
                         "type": "string",
                         "scope": "machine",
-                        "markdownDescription": "C51 UV4.exe path",
+                        "markdownDescription": "Keil C51 的 `UV4.exe` 完整路径。",
                         "default": "null"
                     },
                     "KeilAssistant.MDK.Uv4Path": {
                         "type": "string",
                         "scope": "machine",
-                        "markdownDescription": "MDK UV4.exe path",
+                        "markdownDescription": "Keil MDK 的 `UV4.exe` 完整路径。",
                         "default": "null"
                     },
                     "KeilAssistant.Project.ExcludeList": {
                         "type": "array",
                         "scope": "resource",
-                        "markdownDescription": "uVision project file names or workspace-relative paths to exclude from discovery",
+                        "markdownDescription": "查找工程时排除的 uVision 工程文件名或相对于工作区的路径。",
                         "default": []
                     },
                     "KeilAssistant.Project.FileLocationList": {
                         "type": "array",
                         "scope": "resource",
-                        "markdownDescription": "Additional uVision project file paths to load (absolute or relative to the first workspace folder)",
+                        "markdownDescription": "要额外加载的 uVision 工程路径，可使用绝对路径或相对于第一个工作区文件夹的路径。",
                         "default": []
                     },
                     "KeilAssistant.Project.AutoAddNewFiles": {
                         "type": "boolean",
                         "scope": "resource",
-                        "markdownDescription": "Automatically add files created in VS Code to a Keil project after their first save. Ambiguous folder mappings are selected once and remembered.",
+                        "markdownDescription": "在 VS Code 中新建受支持的文件并首次保存后，自动将其加入 Keil 工程。文件夹对应多个分组时，选择一次后会记住。",
                         "default": true
                     }
                 }
@@ -96,7 +96,7 @@
         "commands": [
             {
                 "command": "explorer.open",
-                "title": "Open keil uVision project",
+                "title": "打开 Keil 工程",
                 "icon": {
                     "light": "./res/icons/ClassAdded_16x.svg",
                     "dark": "./res/icons/ClassAdded_16x.svg"
@@ -104,7 +104,7 @@
             },
             {
                 "command": "explorer.discover",
-                "title": "Discover Keil Projects in Workspace",
+                "title": "查找工作区中的 Keil 工程",
                 "icon": {
                     "light": "./res/icons/refresh-light.svg",
                     "dark": "./res/icons/refresh-dark.svg"
@@ -112,27 +112,27 @@
             },
             {
                 "command": "project.addFile",
-                "title": "Add File to Keil Project"
+                "title": "将文件添加到 Keil 工程"
             },
             {
                 "command": "project.createGroup",
-                "title": "New Keil Group"
+                "title": "新建 Keil 分组"
             },
             {
                 "command": "project.addFileToGroup",
-                "title": "Add File to Keil Group"
+                "title": "将文件添加到 Keil 分组"
             },
             {
                 "command": "project.removeFile",
-                "title": "Remove File from Keil Project"
+                "title": "从 Keil 工程移除文件引用"
             },
             {
                 "command": "project.forgetAutoAddFolder",
-                "title": "Forget Auto Add Folder Mapping"
+                "title": "清除自动添加的文件夹分组记录"
             },
             {
                 "command": "project.switch",
-                "title": "Switch Target",
+                "title": "切换编译目标",
                 "icon": {
                     "light": "./res/icons/SwitchSourceOrTarget_16x.svg",
                     "dark": "./res/icons/SwitchSourceOrTarget_16x.svg"
@@ -140,11 +140,11 @@
             },
             {
                 "command": "project.active",
-                "title": "Active Project"
+                "title": "设为当前工程"
             },
             {
                 "command": "project.close",
-                "title": "Close Project",
+                "title": "关闭工程",
                 "icon": {
                     "light": "./res/icons/StatusOffline_16x.svg",
                     "dark": "./res/icons/StatusOffline_16x.svg"
@@ -152,7 +152,7 @@
             },
             {
                 "command": "project.build",
-                "title": "Build",
+                "title": "编译",
                 "icon": {
                     "light": "./res/icons/BuildSelection_16x.svg",
                     "dark": "./res/icons/BuildSelection_16x.svg"
@@ -160,7 +160,7 @@
             },
             {
                 "command": "project.rebuild",
-                "title": "Rebuild",
+                "title": "重新编译",
                 "icon": {
                     "light": "./res/icons/BuildSolution_16x.svg",
                     "dark": "./res/icons/BuildSolution_16x.svg"
@@ -168,7 +168,7 @@
             },
             {
                 "command": "project.download",
-                "title": "Download To Device",
+                "title": "下载到设备",
                 "icon": {
                     "light": "./res/icons/TransferDownload_16x.svg",
                     "dark": "./res/icons/TransferDownload_16x.svg"
@@ -176,7 +176,7 @@
             },
             {
                 "command": "item.copyValue",
-                "title": "Copy Item Value",
+                "title": "复制条目内容",
                 "icon": {
                     "light": "./res/icons/CopyToClipboard_16x.svg",
                     "dark": "./res/icons/CopyToClipboard_16x.svg"
@@ -213,6 +213,11 @@
                 {
                     "command": "explorer.discover",
                     "group": "navigation",
+                    "when": "view == project"
+                },
+                {
+                    "command": "project.forgetAutoAddFolder",
+                    "group": "1_keil@1",
                     "when": "view == project"
                 }
             ],
@@ -289,6 +294,7 @@
                 "id": "a51",
                 "aliases": [
                     "A51",
+                    "8051 汇编",
                     "8051 Assembly"
                 ],
                 "extensions": [
@@ -313,7 +319,7 @@
             "explorer": [
                 {
                     "id": "project",
-                    "name": "Keil uVision Project"
+                    "name": "Keil uVision 工程"
                 }
             ]
         },

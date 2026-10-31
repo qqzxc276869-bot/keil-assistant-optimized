@@ -43,13 +43,13 @@ function run(extensionRoot = path.resolve(__dirname, '..')) {
         .configurations.find((item) => item.name === managed.name).includePath, managed.includePath);
     assert.throws(() => updateCppConfigurationsText(
         '{"configurations":[{"name":"Board.uvprojx: Debug","includePath":["old1"],"includePath":["old2"]}]}',
-        [managed]), /duplicate JSONC key: includePath/);
+        [managed]), /重复的 JSONC 键：includePath/);
     assert.throws(() => updateCppConfigurationsText(
         '{"configurations":[],"configurations":[],"version":4}', [managed]),
-        /duplicate JSONC key: configurations/);
+        /重复的 JSONC 键：configurations/);
     assert.throws(() => updateCppConfigurationsText(JSON.stringify({
         configurations: [{ name: managed.name }, { name: managed.name }], version: 4
-    }), [managed]), /duplicate configurations named/);
+    }), [managed]), /存在同名配置/);
 
     const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'keil-cpp-config-'));
     try {
@@ -59,7 +59,7 @@ function run(extensionRoot = path.resolve(__dirname, '..')) {
         const valid = fs.readFileSync(file, 'utf8');
         assert.strictEqual(parse(valid).version, 4);
         fs.writeFileSync(file, '{ invalid json');
-        assert.throws(() => updateCppConfigurationsFile(file, [second]), /invalid JSONC/);
+        assert.throws(() => updateCppConfigurationsFile(file, [second]), /JSONC 格式无效/);
         assert.strictEqual(fs.readFileSync(file, 'utf8'), '{ invalid json', 'invalid content must be preserved');
     } finally {
         fs.rmSync(scratch, { recursive: true, force: true });

@@ -164,9 +164,9 @@ async function run(extensionRoot = path.resolve(__dirname, '..')) {
             'an entirely duplicate batch should not write the project');
         const beforeRejectedBatch = actualXml;
         await assert.rejects(() => addFilesToKeilProject(projectPath, 'Debug', 'Application',
-            [extraPath, path.join(sourceDir, 'notes.txt')]), /Unsupported Keil file type/);
+            [extraPath, path.join(sourceDir, 'notes.txt')]), /不支持的 Keil 文件类型/);
         await assert.rejects(() => addFilesToKeilProject(projectPath, 'Debug', 'Application',
-            [extraPath, path.join(sourceDir, 'missing.c')]), /does not exist/);
+            [extraPath, path.join(sourceDir, 'missing.c')]), /源文件不存在/);
         assert.strictEqual(fs.readFileSync(projectPath, 'utf8'), beforeRejectedBatch,
             'invalid batches must leave the project unchanged');
 
@@ -378,7 +378,7 @@ async function run(extensionRoot = path.resolve(__dirname, '..')) {
         assert.strictEqual(fs.readFileSync(includeProjectPath, 'utf8'), beforeInvalidInclude,
             'invalid include directories should not edit the project');
         await assert.rejects(() => addIncludeDirectoryToKeilProject(projectPath, 'Debug', newIncludeDir),
-            /compiler options/, 'a target without Keil C compiler options should be rejected');
+            /C 编译器选项不存在或不唯一/, 'a target without Keil C compiler options should be rejected');
 
         console.log('Project edit test passed: add/remove file, create group/include paths, no-op, stale references, target isolation, CRLF, XML, .uvproj.');
     } finally {

@@ -26,11 +26,11 @@ export function activate(context: vscode.ExtensionContext) {
     subscriber.push(vscode.commands.registerCommand('explorer.open', async () => {
 
         const uri = await vscode.window.showOpenDialog({
-            openLabel: 'Open a keil project',
+            openLabel: '打开 Keil 工程',
             canSelectFolders: false,
             canSelectMany: false,
             filters: {
-                'keil project xml': ['uvproj', 'uvprojx']
+                'Keil 工程文件': ['uvproj', 'uvprojx']
             }
         });
 
@@ -43,7 +43,7 @@ export function activate(context: vscode.ExtensionContext) {
                 await prjExplorer.rememberProject(uvPrjPath);
             }
         } catch (error) {
-            vscode.window.showErrorMessage(`open project failed !, msg: ${(<Error>error).message}`);
+            vscode.window.showErrorMessage(`打开 Keil 工程失败：${(<Error>error).message}`);
         }
     }));
 
@@ -81,7 +81,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     subscriber.push(vscode.commands.registerCommand('item.copyValue', (item?: IView) => {
         if (item?.tooltip === undefined) {
-            vscode.window.showInformationMessage('Use Copy Value from a Keil project tree item.');
+            vscode.window.showInformationMessage('请在 Keil 工程树中选择条目后使用“复制条目内容”。');
             return;
         }
         return vscode.env.clipboard.writeText(item.tooltip);
@@ -133,7 +133,7 @@ function readXmlText(value: any): string {
         (value._ === undefined || typeof value._ === 'string')) {
         return value._ || '';
     }
-    throw new Error('The Keil project contains unsupported compiler option text.');
+    throw new Error('Keil 工程包含不支持的编译选项文本。');
 }
 
 //===============================
@@ -418,7 +418,7 @@ class KeilProject implements IView, KeilProjectInfo {
         this.reloadTimer = setTimeout(() => {
             this.reloadTimer = undefined;
             this.reload().catch((error) =>
-                vscode.window.showErrorMessage(`Reload Keil project failed: ${error.message}`));
+                vscode.window.showErrorMessage(`重新加载 Keil 工程失败：${error.message}`));
         }, 300);
     }
 
@@ -486,7 +486,7 @@ class KeilProject implements IView, KeilProjectInfo {
         }
         if (this.closed) {
             nextTargets.forEach((target) => target.close());
-            throw new Error('The Keil project was closed while reloading.');
+            throw new Error('重新加载时 Keil 工程已关闭。');
         }
         this.updateCppProperties(nextTargets);
         const previousTargets = this.targetList;
@@ -509,7 +509,7 @@ class KeilProject implements IView, KeilProjectInfo {
             this.logger.log(error);
             if (!KeilProject.warnedCppConfigs.has(configPath)) {
                 KeilProject.warnedCppConfigs.add(configPath);
-                vscode.window.showWarningMessage(`Keil Assistant could not update ${configPath}. Check its JSON format; the existing file was kept.`);
+                vscode.window.showWarningMessage(`无法更新 ${configPath}。请检查 JSON 格式；原文件已保留。`);
             }
         }
     }
@@ -780,11 +780,11 @@ abstract class Target implements IView {
         const uv4PathIndex = commands.indexOf('--uv4Path');
         const uv4Path = uv4PathIndex >= 0 ? commands[uv4PathIndex + 1] : undefined;
         if (!new File(builderPath).IsFile()) {
-            vscode.window.showErrorMessage(`Keil Assistant builder was not found: ${builderPath}`);
+            vscode.window.showErrorMessage(`找不到 Keil Assistant 编译工具：${builderPath}`);
             return;
         }
         if (!uv4Path || !new File(uv4Path).IsFile()) {
-            vscode.window.showErrorMessage('Keil UV4.exe was not found. Set KeilAssistant.MDK.Uv4Path or KeilAssistant.C51.Uv4Path in VS Code settings.');
+            vscode.window.showErrorMessage('找不到 Keil UV4.exe。请在 VS Code 设置中配置 KeilAssistant.MDK.Uv4Path 或 KeilAssistant.C51.Uv4Path。');
             return;
         }
 
@@ -794,7 +794,7 @@ abstract class Target implements IView {
         const taskKey = process.platform === 'win32' ? logPath.toLowerCase() : logPath;
         const running = Target.runningTasks.get(taskKey);
         if (running) {
-            vscode.window.showWarningMessage(`Keil ${running} is still running for ${this.project.uvprjFile.dir}. Wait for it to finish before starting ${name}.`);
+            vscode.window.showWarningMessage(`Keil 工程 ${this.project.uvprjFile.dir} 正在${running}，请等待完成后再${name}。`);
             return;
         }
         Target.runningTasks.set(taskKey, name);
@@ -812,7 +812,7 @@ abstract class Target implements IView {
                 const workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(this.project.uvprjFile.path));
                 const runId = crypto.randomBytes(8).toString('hex');
                 const task = new vscode.Task({ type: 'keil-task', runId }, workspaceFolder || vscode.TaskScope.Global,
-                    `${name}: ${this.project.uvprjFile.name} / ${this.targetName}`, 'Keil Assistant');
+                    `${name}: ${this.project.uvprjFile.name} / ${this.targetName}`, 'Keil 助手');
                 task.execution = new vscode.ProcessExecution(builderPath, args, { cwd: this.project.uvprjFile.dir });
                 task.isBackground = false;
                 task.problemMatchers = this.getProblemMatcher();
@@ -830,20 +830,20 @@ abstract class Target implements IView {
                 vscode.tasks.executeTask(task).then(undefined, (error) => {
                     if (endSubscription) { endSubscription.dispose(); }
                     release();
-                    vscode.window.showErrorMessage(`Keil ${name} failed to start: ${error.message}`);
+                    vscode.window.showErrorMessage(`Keil ${name}启动失败：${error.message}`);
                 });
             } catch (error) {
                 if (endSubscription) { endSubscription.dispose(); }
                 release();
-                vscode.window.showErrorMessage(`Keil ${name} failed to start: ${(<Error>error).message}`);
+                vscode.window.showErrorMessage(`Keil ${name}启动失败：${(<Error>error).message}`);
             }
 
         } else {
-            // VS Code 1.40 cannot report completion of a command in an
+            // VS Code cannot report completion of a command in an
             // interactive terminal, so use a process with a real exit event.
             try {
                 const output = Target.processOutput ||
-                    (Target.processOutput = vscode.window.createOutputChannel('Keil Assistant'));
+                    (Target.processOutput = vscode.window.createOutputChannel('Keil 助手'));
                 output.appendLine(`${name}: ${this.project.uvprjFile.name} / ${this.targetName}`);
                 output.show(true);
                 const processHandle = child_process.spawn(builderPath, args, {
@@ -854,32 +854,32 @@ abstract class Target implements IView {
                 processHandle.stderr?.on('data', (chunk) => output.append(chunk.toString()));
                 processHandle.on('error', (error) => {
                     release();
-                    output.appendLine(`Keil ${name} failed to start: ${error.message}`);
-                    vscode.window.showErrorMessage(`Keil ${name} failed to start: ${error.message}`);
+                    output.appendLine(`Keil ${name}启动失败：${error.message}`);
+                    vscode.window.showErrorMessage(`Keil ${name}启动失败：${error.message}`);
                 });
                 processHandle.on('close', (code, signal) => {
                     release();
-                    output.appendLine(`Keil ${name} exited with code ${code === null ? 'unknown' : code}${signal ? ` (signal ${signal})` : ''}.`);
+                    output.appendLine(`Keil ${name}已结束，退出码 ${code === null ? '未知' : code}${signal ? `（信号 ${signal}）` : ''}。`);
                     this.updateSourceRefs();
                 });
             } catch (error) {
                 release();
-                Target.processOutput?.appendLine(`Keil ${name} failed to start: ${(<Error>error).message}`);
-                vscode.window.showErrorMessage(`Keil ${name} failed to start: ${(<Error>error).message}`);
+                Target.processOutput?.appendLine(`Keil ${name}启动失败：${(<Error>error).message}`);
+                vscode.window.showErrorMessage(`Keil ${name}启动失败：${(<Error>error).message}`);
             }
         }
     }
 
     build() {
-        this.runTask('build', this.getBuildCommand());
+        this.runTask('编译', this.getBuildCommand());
     }
 
     rebuild() {
-        this.runTask('rebuild', this.getRebuildCommand());
+        this.runTask('重新编译', this.getRebuildCommand());
     }
 
     download() {
-        this.runTask('download', this.getDownloadCommand());
+        this.runTask('下载到设备', this.getDownloadCommand());
     }
 
     hasLoadedSourceRefs(): boolean {
@@ -965,7 +965,7 @@ class C51Target extends Target {
     protected checkProject(target: any): Error | undefined {
         if (target['TargetOption']['Target51'] === undefined ||
             target['TargetOption']['Target51']['C51'] === undefined) {
-            return new Error(`This uVision project is not a C51 project, but have a 'uvproj' suffix !`);
+            return new Error('该 .uvproj 文件不是有效的 Keil C51 工程。');
         }
     }
 
@@ -1521,7 +1521,7 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
             }
         });
         this.autoAddQueue = task.then(() => undefined, (error) => {
-            vscode.window.showErrorMessage(`Could not automatically add ${node_path.basename(queued.path)} to Keil: ${(<Error>error).message}`);
+            vscode.window.showErrorMessage(`无法自动将 ${node_path.basename(queued.path)} 加入 Keil 工程：${(<Error>error).message}`);
         });
         return this.autoAddQueue;
     }
@@ -1535,18 +1535,18 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
         const mappings = this.getAutoAddMappings();
         const folders = Object.keys(mappings).sort();
         if (!folders.length) {
-            vscode.window.showInformationMessage('No automatic Keil folder mappings have been remembered.');
+            vscode.window.showInformationMessage('还没有保存过自动添加文件夹的分组记录。');
             return;
         }
         const selected = await vscode.window.showQuickPick(folders.map((folder) => ({
             label: folder,
             description: `${mappings[folder].projectPath} / ${mappings[folder].targetName} / ${mappings[folder].groupName}`
-        })), { placeHolder: 'Choose a folder mapping to forget' });
+        })), { placeHolder: '选择要清除分组记录的文件夹' });
         if (!selected) { return; }
         const updated = { ...mappings };
         delete updated[selected.label];
         await this.context.workspaceState.update(this.autoAddMappingsKey, updated);
-        vscode.window.showInformationMessage(`Forgot the automatic Keil group for ${selected.label}.`);
+        vscode.window.showInformationMessage(`已清除 ${selected.label} 的自动添加分组记录。`);
     }
 
     private autoAddChoices(sourcePath: string): { exact: AutoAddDestination[]; related: AutoAddDestination[] } {
@@ -1590,8 +1590,8 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
                 normalizedFileKey(choice.project.uvprjFile.path) === normalizedFileKey(mapping.projectPath) &&
                 choice.target.targetName === mapping.targetName && choice.group.label === mapping.groupName);
             if (remembered) { return remembered; }
-            vscode.window.showWarningMessage(`Automatic Keil addition skipped for ${node_path.basename(sourcePath)}: ` +
-                `the remembered group is unavailable. Open ${mapping.projectPath}, or run Forget Auto Add Folder Mapping.`);
+            vscode.window.showWarningMessage(`已跳过自动添加 ${node_path.basename(sourcePath)}：` +
+                `原先记录的分组不可用。请打开 ${mapping.projectPath}，或运行“清除自动添加的文件夹分组记录”。`);
             return undefined;
         }
         const choices = exact.length ? exact : related;
@@ -1600,7 +1600,7 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
             label: choice.group.label,
             description: `${choice.project.label} / ${choice.target.targetName} — ${choice.project.uvprjFile.path}`,
             choice
-        })), { placeHolder: `Choose the Keil group for new files in ${node_path.dirname(sourcePath)}` });
+        })), { placeHolder: `选择 ${node_path.dirname(sourcePath)} 中新文件所属的 Keil 分组` });
         if (!selected || queued.cancelled || normalizedFileKey(queued.path) !== normalizedFileKey(sourcePath)) {
             return undefined;
         }
@@ -1641,7 +1641,7 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
         await previous;
         try {
             if (this.prjList.get(key) !== project) {
-                throw new Error('The selected Keil project is no longer open.');
+                throw new Error('所选 Keil 工程已关闭。');
             }
             return await edit();
         } finally {
@@ -1686,7 +1686,7 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
             try {
                 await this.openProject(projectPath);
             } catch (error) {
-                vscode.window.showErrorMessage(`Open Keil project failed: ${projectPath}. ${(<Error>error).message}`);
+                vscode.window.showErrorMessage(`打开 Keil 工程失败：${projectPath}。${(<Error>error).message}`);
             }
         }
 
@@ -1705,7 +1705,7 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
                 await this.openProject(nested[0]);
                 await this.rememberProject(nested[0]);
             } catch (error) {
-                vscode.window.showErrorMessage(`Open Keil project failed: ${nested[0]}. ${(<Error>error).message}`);
+                vscode.window.showErrorMessage(`打开 Keil 工程失败：${nested[0]}。${(<Error>error).message}`);
             }
         } else if (nested.length > 0 && (forcePrompt || !this.context.workspaceState.get<boolean>(this.discoveryPromptedKey, false))) {
             const choices = nested.map((path) => {
@@ -1715,7 +1715,7 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
             });
             const selected = await vscode.window.showQuickPick(choices, {
                 canPickMany: true,
-                placeHolder: 'Select Keil projects to load; the current VS Code workspace stays open'
+                placeHolder: '选择要加载的 Keil 工程；当前 VS Code 工作区不会切换'
             });
             await this.context.workspaceState.update(this.discoveryPromptedKey, true);
             if (selected) {
@@ -1724,12 +1724,12 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
                         await this.openProject(choice.projectPath);
                         await this.rememberProject(choice.projectPath);
                     } catch (error) {
-                        vscode.window.showErrorMessage(`Open Keil project failed: ${choice.projectPath}. ${(<Error>error).message}`);
+                        vscode.window.showErrorMessage(`打开 Keil 工程失败：${choice.projectPath}。${(<Error>error).message}`);
                     }
                 }
             }
         } else if (forcePrompt && nested.length === 0) {
-            vscode.window.showInformationMessage('No additional Keil projects were found in this workspace.');
+            vscode.window.showInformationMessage('当前工作区没有找到其他 Keil 工程。');
         }
     }
 
@@ -1746,7 +1746,7 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
         const fullPath = node_path.resolve(path);
         const file = new File(fullPath);
         if (!/\.uvprojx?$/i.test(fullPath) || !file.IsFile()) {
-            throw new Error(`Project file does not exist: ${fullPath}`);
+            throw new Error(`Keil 工程文件不存在：${fullPath}`);
         }
         const prjID = getMD5(process.platform === 'win32' ? fullPath.toLowerCase() : fullPath);
         if (this.prjList.has(prjID)) {
@@ -1797,12 +1797,12 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
     private async chooseProject(view?: IView): Promise<KeilProject | undefined> {
         if (view) {
             const project = this.prjList.get(view.prjID);
-            if (!project) { vscode.window.showWarningMessage('The selected Keil project is no longer open.'); }
+            if (!project) { vscode.window.showWarningMessage('所选 Keil 工程已关闭。'); }
             return project;
         }
         const projects = Array.from(this.prjList.values());
         if (projects.length === 0) {
-            vscode.window.showWarningMessage('Open a Keil project first.');
+            vscode.window.showWarningMessage('请先打开 Keil 工程。');
             return undefined;
         }
         if (projects.length === 1) { return projects[0]; }
@@ -1810,7 +1810,7 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
             label: project.label,
             description: project.uvprjFile.path,
             project
-        })), { placeHolder: 'Select a Keil project' });
+        })), { placeHolder: '选择 Keil 工程' });
         return selected?.project;
     }
 
@@ -1834,12 +1834,12 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
         if (prj) {
             const tList = prj.getTargets();
             if (tList.length === 0) {
-                vscode.window.showWarningMessage(`No Keil targets were found in ${prj.label}.`);
+                vscode.window.showWarningMessage(`${prj.label} 中没有 Keil 编译目标。`);
                 return;
             }
             const targetName = await vscode.window.showQuickPick(tList.map((ele) => { return ele.targetName; }), {
                 canPickMany: false,
-                placeHolder: 'please select a target name for keil project'
+                placeHolder: '选择 Keil 编译目标'
             });
             if (targetName) {
                 prj.setActiveTarget(targetName);
@@ -1852,15 +1852,15 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
             const project = await this.chooseProject(view);
             const target = view?.contextVal === 'Target' ? project?.getTargetByName(view.label) : project?.getActiveTarget();
             if (!project || !target) {
-                vscode.window.showWarningMessage('Open a Keil project and select a target first.');
+                vscode.window.showWarningMessage('请先打开 Keil 工程并选择编译目标。');
                 return;
             }
             const name = await vscode.window.showInputBox({
-                prompt: `New group in ${project.label} / ${target.targetName}`,
-                placeHolder: 'Group name, for example Application/User',
+                prompt: `在 ${project.label} / ${target.targetName} 中新建分组`,
+                placeHolder: '输入分组名，例如 Application/User',
                 validateInput: (value) => {
-                    if (!value.trim()) { return 'Enter a group name.'; }
-                    if (/[\u0000-\u001f]/.test(value)) { return 'Control characters are not allowed.'; }
+                    if (!value.trim()) { return '请输入分组名。'; }
+                    if (/[\u0000-\u001f]/.test(value)) { return '分组名不能包含控制字符。'; }
                     return undefined;
                 }
             });
@@ -1869,14 +1869,14 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
                 if (!await vscode.workspace.saveAll()) { return; }
                 const result = await createGroupInKeilProject(project.uvprjFile.path, target.targetName, name);
                 if (result.status === 'already-present') {
-                    vscode.window.showInformationMessage(`Keil group ${name.trim()} already exists in ${target.targetName}.`);
+                    vscode.window.showInformationMessage(`${target.targetName} 中已存在 Keil 分组 ${name.trim()}。`);
                 } else {
                     await project.reload();
-                    vscode.window.showInformationMessage(`Created Keil group ${name.trim()} in ${target.targetName}.`);
+                    vscode.window.showInformationMessage(`已在 ${target.targetName} 中新建 Keil 分组 ${name.trim()}。`);
                 }
             });
         } catch (error) {
-            vscode.window.showErrorMessage(`Could not create the Keil group: ${(<Error>error).message}`);
+            vscode.window.showErrorMessage(`新建 Keil 分组失败：${(<Error>error).message}`);
         }
     }
 
@@ -1893,22 +1893,22 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
                     return list;
                 }, []);
             if (choices.length === 0) {
-                vscode.window.showWarningMessage('No files are listed in an open Keil project.');
+                vscode.window.showWarningMessage('已打开的 Keil 工程中没有可移除的文件引用。');
                 return;
             }
             const selected = await vscode.window.showQuickPick(choices, {
-                placeHolder: 'Select a Keil project file to remove (the disk file will be kept)'
+                placeHolder: '选择要移除的工程文件引用（不会删除磁盘文件）'
             });
             item = selected?.source;
         }
         if (!item) { return; }
         if (!item.targetName || !item.groupName) {
-            vscode.window.showWarningMessage('Select a file listed directly in a Keil group.');
+            vscode.window.showWarningMessage('请选择 Keil 分组中直接列出的文件。');
             return;
         }
         const project = this.prjList.get(item.prjID);
         if (!project) {
-            vscode.window.showWarningMessage('The selected Keil project is no longer open.');
+            vscode.window.showWarningMessage('所选 Keil 工程已关闭。');
             return;
         }
         const source = item;
@@ -1918,14 +1918,14 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
                 const result = await removeFileFromKeilProject(project.uvprjFile.path,
                     source.targetName!, source.groupName!, source.file.path);
                 if (result.status === 'not-present') {
-                    vscode.window.showInformationMessage(`${source.label} is no longer in ${source.targetName} / ${source.groupName}.`);
+                    vscode.window.showInformationMessage(`${source.label} 已不在 ${source.targetName} / ${source.groupName} 中。`);
                 } else {
                     await project.reload();
-                    vscode.window.showInformationMessage(`Removed ${source.label} from the Keil project. The disk file was kept.`);
+                    vscode.window.showInformationMessage(`已从 Keil 工程移除 ${source.label} 的引用，磁盘文件已保留。`);
                 }
             });
         } catch (error) {
-            vscode.window.showErrorMessage(`Could not remove the file from the Keil project: ${(<Error>error).message}`);
+            vscode.window.showErrorMessage(`从 Keil 工程移除文件引用失败：${(<Error>error).message}`);
         }
     }
 
@@ -1935,7 +1935,7 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
         const seen = new Set<string>();
         for (const uri of uris) {
             if (!uri || uri.scheme !== 'file') {
-                skipped.push('a non-local item');
+                skipped.push('非本地文件');
                 continue;
             }
             const sourcePath = uri.fsPath;
@@ -1944,9 +1944,9 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
             if (seen.has(normalizedKey)) { continue; }
             seen.add(normalizedKey);
             if (!new File(sourcePath).IsFile()) {
-                skipped.push(`${node_path.basename(sourcePath)} (not a saved file)`);
+                skipped.push(`${node_path.basename(sourcePath)}（不是已保存的文件）`);
             } else if (!getKeilFileType(sourcePath)) {
-                skipped.push(`${node_path.basename(sourcePath)} (unsupported file type)`);
+                skipped.push(`${node_path.basename(sourcePath)}（不支持的文件类型）`);
             } else {
                 paths.push(sourcePath);
             }
@@ -1955,8 +1955,8 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
     }
 
     private reportSkippedFiles(skipped: string[]): string {
-        const examples = skipped.slice(0, 3).join(', ');
-        return skipped.length > 3 ? `${examples}, and ${skipped.length - 3} more` : examples;
+        const examples = skipped.slice(0, 3).join('、');
+        return skipped.length > 3 ? `${examples}，另有 ${skipped.length - 3} 项` : examples;
     }
 
     private isCHeaderFile(sourcePath: string): boolean {
@@ -1979,13 +1979,13 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
         const skipped = initiallySkipped.slice();
         const paths = sourcePaths.filter((sourcePath) => {
             if (group.excludedFromBuild && getKeilFileType(sourcePath) !== '5') {
-                skipped.push(`${node_path.basename(sourcePath)} (group excluded from build)`);
+                skipped.push(`${node_path.basename(sourcePath)}（分组已排除编译）`);
                 return false;
             }
             return true;
         });
         if (!paths.length) {
-            vscode.window.showWarningMessage(`No files were added. ${this.reportSkippedFiles(skipped)}`);
+            vscode.window.showWarningMessage(`没有添加文件：${this.reportSkippedFiles(skipped)}`);
             return;
         }
         if (!alreadySaved && !await vscode.workspace.saveAll()) { return; }
@@ -2014,7 +2014,7 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
         if (added || includeChanged) {
             try { await project.reload(); }
             catch (error) {
-                vscode.window.showWarningMessage(`The Keil project was updated, but its view could not refresh: ${(<Error>error).message}`);
+                vscode.window.showWarningMessage(`Keil 工程已更新，但工程树刷新失败：${(<Error>error).message}`);
                 return;
             }
         }
@@ -2022,9 +2022,9 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
             const fileName = node_path.basename(paths[0]);
             const result = results[0];
             if (result.status === 'already-present') {
-                vscode.window.showInformationMessage(`${fileName} is already in ${target.targetName} / ${result.groupName}${includeChanged ? '; its header directory was added to IncludePath' : ''}.`);
+                vscode.window.showInformationMessage(`${fileName} 已在 ${target.targetName} / ${result.groupName} 分组中${includeChanged ? '；已将头文件目录加入 IncludePath' : ''}。`);
             } else {
-                vscode.window.showInformationMessage(`Added ${fileName} to ${target.targetName} / ${group.label}${includeChanged ? ' and its directory to IncludePath' : ''}.`);
+                vscode.window.showInformationMessage(`已将 ${fileName} 加入 ${target.targetName} / ${group.label} 分组${includeChanged ? '，并将其目录加入 IncludePath' : ''}。`);
             }
             return;
         }
@@ -2032,13 +2032,13 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
         const already = results.map((result, index) => result.status === 'already-present'
             ? `${node_path.basename(paths[index])} (${result.groupName})` : undefined)
             .filter((item): item is string => !!item);
-        const summary = `Keil ${target.targetName} / ${group.label}: added ${added}, already listed ${already.length}` +
-            `${includeChanged ? `, include directories added ${includeChanged}` : ''}` +
-            `${skipped.length ? `, skipped ${skipped.length}` : ''}.`;
+        const summary = `Keil ${target.targetName} / ${group.label}：新增 ${added} 个，已存在 ${already.length} 个` +
+            `${includeChanged ? `，新增头文件目录 ${includeChanged} 个` : ''}` +
+            `${skipped.length ? `，跳过 ${skipped.length} 个` : ''}。`;
         const details = [
-            already.length ? `Already listed: ${this.reportSkippedFiles(already)}.` : '',
-            skipped.length ? `Skipped: ${this.reportSkippedFiles(skipped)}.` : '',
-            includeErrors.length ? `IncludePath failed: ${this.reportSkippedFiles(includeErrors)}.` : ''
+            already.length ? `已存在：${this.reportSkippedFiles(already)}。` : '',
+            skipped.length ? `已跳过：${this.reportSkippedFiles(skipped)}。` : '',
+            includeErrors.length ? `IncludePath 更新失败：${this.reportSkippedFiles(includeErrors)}。` : ''
         ].filter(Boolean).join(' ');
         if (skipped.length || includeErrors.length) {
             vscode.window.showWarningMessage(`${summary} ${details}`);
@@ -2053,17 +2053,17 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
                 (list, project) => {
                     project.getTargets().forEach((target) => target.getFileGroups().forEach((group) => list.push({
                         label: group.label,
-                        description: `${project.label} / ${target.targetName}${group.excludedFromBuild ? ' — excluded from build' : ''}`,
+                        description: `${project.label} / ${target.targetName}${group.excludedFromBuild ? ' — 已排除编译' : ''}`,
                         group
                     })));
                     return list;
                 }, []);
             if (choices.length === 0) {
-                vscode.window.showWarningMessage('No Keil groups are available. Create a group first.');
+                vscode.window.showWarningMessage('没有可用的 Keil 分组，请先新建分组。');
                 return;
             }
             const selected = await vscode.window.showQuickPick(choices, {
-                placeHolder: 'Select the Keil group to add a file to'
+                placeHolder: '选择要添加文件的 Keil 分组'
             });
             item = selected?.group;
         }
@@ -2073,25 +2073,25 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
         const groupName = item.label;
         const group = target?.getFileGroups().find((candidate) => candidate.label === groupName);
         if (!project || !target || !group) {
-            vscode.window.showWarningMessage('The selected Keil group is no longer available.');
+            vscode.window.showWarningMessage('所选 Keil 分组已不可用。');
             return;
         }
         try {
             const selected = await vscode.window.showOpenDialog({
-                openLabel: `Add to ${item.label}`,
+                openLabel: `添加到 ${item.label}`,
                 canSelectFolders: false,
                 canSelectMany: true,
-                filters: { 'Keil project files': Array.from(SUPPORTED_KEIL_FILE_EXTENSIONS, (extension) => extension.slice(1)) }
+                filters: { 'Keil 工程文件': Array.from(SUPPORTED_KEIL_FILE_EXTENSIONS, (extension) => extension.slice(1)) }
             });
             if (!selected || !selected.length) { return; }
             const { paths, skipped } = this.collectKeilFiles(selected);
             if (!paths.length) {
-                vscode.window.showWarningMessage(`Choose saved Keil source, assembly, library, or header files. ${this.reportSkippedFiles(skipped)}`);
+                vscode.window.showWarningMessage(`请选择已保存的 Keil 源文件、汇编文件、库文件或头文件。${this.reportSkippedFiles(skipped)}`);
                 return;
             }
             await this.addSelectedFiles(project, target, group, paths, skipped);
         } catch (error) {
-            vscode.window.showErrorMessage(`Could not add the file to the Keil group: ${(<Error>error).message}`);
+            vscode.window.showErrorMessage(`将文件添加到 Keil 分组失败：${(<Error>error).message}`);
         }
     }
 
@@ -2101,24 +2101,24 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
                 uri && uri.scheme === 'file' ? [uri] : [];
             if (!sourceUris.length) {
                 const selected = await vscode.window.showOpenDialog({
-                    openLabel: 'Add to Keil project',
+                    openLabel: '添加到 Keil 工程',
                     canSelectFolders: false,
                     canSelectMany: true,
-                    filters: { 'Keil project files': Array.from(SUPPORTED_KEIL_FILE_EXTENSIONS, (extension) => extension.slice(1)) }
+                    filters: { 'Keil 工程文件': Array.from(SUPPORTED_KEIL_FILE_EXTENSIONS, (extension) => extension.slice(1)) }
                 });
                 sourceUris = selected || [];
             }
             if (!sourceUris.length) { return; }
             const { paths, skipped } = this.collectKeilFiles(sourceUris);
             if (!paths.length) {
-                vscode.window.showWarningMessage(`Choose saved Keil source, assembly, library, or header files. ${this.reportSkippedFiles(skipped)}`);
+                vscode.window.showWarningMessage(`请选择已保存的 Keil 源文件、汇编文件、库文件或头文件。${this.reportSkippedFiles(skipped)}`);
                 return;
             }
 
             if (!this.prjList.size) { await this.loadWorkspace(); }
             const projects = Array.from(this.prjList.values());
             if (!projects.length) {
-                vscode.window.showWarningMessage('Open a Keil .uvproj or .uvprojx project first.');
+                vscode.window.showWarningMessage('请先打开 Keil .uvproj 或 .uvprojx 工程。');
                 return;
             }
 
@@ -2132,7 +2132,7 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
                     project: item
                 }));
                 const selected = await vscode.window.showQuickPick(choices, {
-                    placeHolder: 'Select the Keil project for this file'
+                    placeHolder: '选择文件所属的 Keil 工程'
                 });
                 project = selected?.project;
             }
@@ -2146,7 +2146,7 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
                 const selected = await vscode.window.showQuickPick(targets.map((item) => ({
                     label: item.targetName,
                     target: item
-                })), { placeHolder: 'Select the Keil target to update' });
+                })), { placeHolder: '选择要更新的 Keil 编译目标' });
                 target = selected?.target;
             }
             if (!target) { return; }
@@ -2155,8 +2155,8 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
             const groups = target.getFileGroups().filter((group) => !hasBuildInput || !group.excludedFromBuild);
             if (!groups.length) {
                 vscode.window.showWarningMessage(hasBuildInput
-                    ? 'No build-enabled Keil group is available in this target.'
-                    : 'No Keil group is available in this target. Create a group first.');
+                    ? '此编译目标中没有可参与编译的 Keil 分组。'
+                    : '此编译目标中没有 Keil 分组，请先新建分组。');
                 return;
             }
             let group: FileGroup | undefined;
@@ -2165,15 +2165,15 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
             } else {
                 const selected = await vscode.window.showQuickPick(groups.map((item) => ({
                     label: item.label,
-                    description: item.excludedFromBuild ? 'Excluded from build' : '',
+                    description: item.excludedFromBuild ? '已排除编译' : '',
                     group: item
-                })), { placeHolder: 'Select the Keil group for this file' });
+                })), { placeHolder: '选择文件所属的 Keil 分组' });
                 group = selected?.group;
             }
             if (!group) { return; }
             await this.addSelectedFiles(project, target, group, paths, skipped);
         } catch (error) {
-            vscode.window.showErrorMessage(`Could not add the file to the Keil project: ${(<Error>error).message}`);
+            vscode.window.showErrorMessage(`将文件添加到 Keil 工程失败：${(<Error>error).message}`);
         }
     }
 
@@ -2186,17 +2186,17 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
                     view instanceof Source ? view.targetName : undefined;
                 const target = targetName ? prj.getTargetByName(targetName) : prj.getActiveTarget();
                 if (target) { return target; }
-                vscode.window.showWarningMessage(`No Keil target is available in ${prj.label}.`);
+                vscode.window.showWarningMessage(`${prj.label} 中没有可用的 Keil 编译目标。`);
             } else {
-                vscode.window.showWarningMessage('The selected Keil project is no longer open.');
+                vscode.window.showWarningMessage('所选 Keil 工程已关闭。');
             }
         } else { // get active target
             if (this.currentActiveProject) {
                 const target = this.currentActiveProject.getActiveTarget();
                 if (target) { return target; }
-                vscode.window.showWarningMessage(`No Keil target is available in ${this.currentActiveProject.label}.`);
+                vscode.window.showWarningMessage(`${this.currentActiveProject.label} 中没有可用的 Keil 编译目标。`);
             } else {
-                vscode.window.showWarningMessage('Open a Keil project first.');
+                vscode.window.showWarningMessage('请先打开 Keil 工程。');
             }
         }
     }
@@ -2236,7 +2236,7 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
                         vscode.window.showTextDocument(vscode.Uri.parse(file.ToUri()), { preview: isPreview });
 
                     } else {
-                        vscode.window.showWarningMessage(`Not found file: ${source.file.path}`);
+                        vscode.window.showWarningMessage(`找不到文件：${source.file.path}`);
                     }
                 }
                 break;

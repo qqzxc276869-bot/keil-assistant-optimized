@@ -5,7 +5,7 @@
             "MOV ${1:A}, ${2:Rn}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_MOVC": {
         "prefix": "MOVC",
@@ -13,7 +13,7 @@
             "MOVC ${1:A}, ${2:value}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_MOVX": {
         "prefix": "MOVX",
@@ -21,7 +21,7 @@
             "MOVX ${1:A}, ${2:value}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_PUSH": {
         "prefix": "PUSH",
@@ -29,7 +29,7 @@
             "PUSH ${1:direct}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_POP": {
         "prefix": "POP",
@@ -37,7 +37,7 @@
             "POP ${1:direct}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_XCH": {
         "prefix": "XCH",
@@ -45,7 +45,7 @@
             "XCH ${1:A}, ${2:Rn}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_XCHD": {
         "prefix": "XCHD",
@@ -53,7 +53,7 @@
             "XCHD ${1:A}, ${2:value}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_ADD": {
         "prefix": "ADD",
@@ -61,7 +61,7 @@
             "ADD ${1:A}, ${2:Rn}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_ADDC": {
         "prefix": "ADDC",
@@ -69,7 +69,7 @@
             "ADDC ${1:A}, ${2:Rn}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_SUBB": {
         "prefix": "SUBB",
@@ -77,7 +77,7 @@
             "SUBB ${1:A}, ${2:Rn}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_INC": {
         "prefix": "INC",
@@ -85,7 +85,7 @@
             "INC ${1:A}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_DEC": {
         "prefix": "DEC",
@@ -93,7 +93,7 @@
             "DEC ${1:A}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_MUL": {
         "prefix": "MUL",
@@ -101,7 +101,7 @@
             "MUL ${1:AB}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_DIV": {
         "prefix": "DIV",
@@ -109,7 +109,7 @@
             "DIV ${1:AB}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_DA": {
         "prefix": "DA",
@@ -117,7 +117,7 @@
             "DA ${1:A}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_ANL": {
         "prefix": "ANL",
@@ -125,7 +125,7 @@
             "ANL ${1:A}, ${2:Rn}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_ORL": {
         "prefix": "ORL",
@@ -133,7 +133,7 @@
             "ORL ${1:A}, ${2:Rn}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_XRL": {
         "prefix": "XRL",
@@ -141,7 +141,7 @@
             "XRL ${1:A}, ${2:Rn}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_CLR": {
         "prefix": "CLR",
@@ -149,7 +149,7 @@
             "CLR ${1:A}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_CPL": {
         "prefix": "CPL",
@@ -157,7 +157,7 @@
             "CPL ${1:A}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_RL": {
         "prefix": "RL",
@@ -165,7 +165,7 @@
             "RL ${1:A}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_RLC": {
         "prefix": "RLC",
@@ -173,7 +173,7 @@
             "RLC ${1:A}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_RR": {
         "prefix": "RR",
@@ -181,7 +181,7 @@
             "RR ${1:A}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_RRC": {
         "prefix": "RRC",
@@ -189,7 +189,7 @@
             "RRC ${1:A}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_SWAP": {
         "prefix": "SWAP",
@@ -197,7 +197,7 @@
             "SWAP ${1:A}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_SETB": {
         "prefix": "SETB",
@@ -205,7 +205,7 @@
             "SETB ${1:C}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_JC": {
         "prefix": "JC",
@@ -213,7 +213,7 @@
             "JC ${1:rel}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_JNC": {
         "prefix": "JNC",
@@ -221,7 +221,7 @@
             "JNC ${1:rel}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_JB": {
         "prefix": "JB",
@@ -229,7 +229,7 @@
             "JB ${1:bit}, ${2:rel}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_JNB": {
         "prefix": "JNB",
@@ -237,7 +237,7 @@
             "JNB ${1:bit}, ${2:rel}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_JBC": {
         "prefix": "JBC",
@@ -245,7 +245,7 @@
             "JBC ${1:bit}, ${2:rel}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_ACALL": {
         "prefix": "ACALL",
@@ -253,7 +253,7 @@
             "ACALL ${1:addr11}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_LCALL": {
         "prefix": "LCALL",
@@ -261,7 +261,7 @@
             "LCALL ${1:addr16}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_RET": {
         "prefix": "RET",
@@ -269,7 +269,7 @@
             "RET"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_RETI": {
         "prefix": "RETI",
@@ -277,7 +277,7 @@
             "RETI"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_AJMP": {
         "prefix": "AJMP",
@@ -285,7 +285,7 @@
             "AJMP ${1:addr11}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_LJMP": {
         "prefix": "LJMP",
@@ -293,7 +293,7 @@
             "LJMP ${1:addr16}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_SJMP": {
         "prefix": "SJMP",
@@ -301,7 +301,7 @@
             "SJMP ${1:rel}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_JMP": {
         "prefix": "JMP",
@@ -309,7 +309,7 @@
             "JMP ${1:value}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_JZ": {
         "prefix": "JZ",
@@ -317,7 +317,7 @@
             "JZ ${1:rel}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_JNZ": {
         "prefix": "JNZ",
@@ -325,7 +325,7 @@
             "JNZ ${1:rel}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_CJNE": {
         "prefix": "CJNE",
@@ -333,7 +333,7 @@
             "CJNE ${1:A}, ${2:direct}, ${3:rel}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_DJNZ": {
         "prefix": "DJNZ",
@@ -341,7 +341,7 @@
             "DJNZ ${1:Rn}, ${2:rel}"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "inst_NOP": {
         "prefix": "NOP",
@@ -349,7 +349,7 @@
             "NOP"
         ],
         "scope": "a51",
-        "description": "8051 assembly instruction"
+        "description": "8051 汇编指令"
     },
     "pseudoinst_ORG": {
         "prefix": "ORG",
@@ -357,7 +357,7 @@
             "ORG"
         ],
         "scope": "a51",
-        "description": "8051 assembly pseudoinstruction"
+        "description": "8051 汇编伪指令"
     },
     "pseudoinst_END": {
         "prefix": "END",
@@ -365,7 +365,7 @@
             "END"
         ],
         "scope": "a51",
-        "description": "8051 assembly pseudoinstruction"
+        "description": "8051 汇编伪指令"
     },
     "pseudoinst_ALTNAME": {
         "prefix": "ALTNAME",
@@ -373,7 +373,7 @@
             "ALTNAME"
         ],
         "scope": "a51",
-        "description": "8051 assembly pseudoinstruction"
+        "description": "8051 汇编伪指令"
     },
     "pseudoinst_INCLUDE": {
         "prefix": "INCLUDE",
@@ -381,7 +381,7 @@
             "INCLUDE"
         ],
         "scope": "a51",
-        "description": "8051 assembly pseudoinstruction"
+        "description": "8051 汇编伪指令"
     },
     "register_PSW": {
         "prefix": "PSW",
@@ -389,7 +389,7 @@
             "PSW"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_ACC": {
         "prefix": "ACC",
@@ -397,7 +397,7 @@
             "ACC"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_B": {
         "prefix": "B",
@@ -405,7 +405,7 @@
             "B"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_SP": {
         "prefix": "SP",
@@ -413,7 +413,7 @@
             "SP"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_DPL": {
         "prefix": "DPL",
@@ -421,7 +421,7 @@
             "DPL"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_DPH": {
         "prefix": "DPH",
@@ -429,7 +429,7 @@
             "DPH"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_PCON": {
         "prefix": "PCON",
@@ -437,7 +437,7 @@
             "PCON"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_TCON": {
         "prefix": "TCON",
@@ -445,7 +445,7 @@
             "TCON"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_TMOD": {
         "prefix": "TMOD",
@@ -453,7 +453,7 @@
             "TMOD"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_TL0": {
         "prefix": "TL0",
@@ -461,7 +461,7 @@
             "TL0"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_TL1": {
         "prefix": "TL1",
@@ -469,7 +469,7 @@
             "TL1"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_TH0": {
         "prefix": "TH0",
@@ -477,7 +477,7 @@
             "TH0"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_TH1": {
         "prefix": "TH1",
@@ -485,7 +485,7 @@
             "TH1"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_IE": {
         "prefix": "IE",
@@ -493,7 +493,7 @@
             "IE"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_IP": {
         "prefix": "IP",
@@ -501,7 +501,7 @@
             "IP"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_SCON": {
         "prefix": "SCON",
@@ -509,7 +509,7 @@
             "SCON"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_SBUF": {
         "prefix": "SBUF",
@@ -517,7 +517,7 @@
             "SBUF"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_CY": {
         "prefix": "CY",
@@ -525,7 +525,7 @@
             "CY"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_AC": {
         "prefix": "AC",
@@ -533,7 +533,7 @@
             "AC"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_F0": {
         "prefix": "F0",
@@ -541,7 +541,7 @@
             "F0"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_RS1": {
         "prefix": "RS1",
@@ -549,7 +549,7 @@
             "RS1"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_RS0": {
         "prefix": "RS0",
@@ -557,7 +557,7 @@
             "RS0"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_OV": {
         "prefix": "OV",
@@ -565,7 +565,7 @@
             "OV"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_P": {
         "prefix": "P",
@@ -573,7 +573,7 @@
             "P"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_TF1": {
         "prefix": "TF1",
@@ -581,7 +581,7 @@
             "TF1"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_TR1": {
         "prefix": "TR1",
@@ -589,7 +589,7 @@
             "TR1"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_TF0": {
         "prefix": "TF0",
@@ -597,7 +597,7 @@
             "TF0"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_TR0": {
         "prefix": "TR0",
@@ -605,7 +605,7 @@
             "TR0"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_IE1": {
         "prefix": "IE1",
@@ -613,7 +613,7 @@
             "IE1"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_IT1": {
         "prefix": "IT1",
@@ -621,7 +621,7 @@
             "IT1"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_IE0": {
         "prefix": "IE0",
@@ -629,7 +629,7 @@
             "IE0"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_IT0": {
         "prefix": "IT0",
@@ -637,7 +637,7 @@
             "IT0"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_EA": {
         "prefix": "EA",
@@ -645,7 +645,7 @@
             "EA"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_ES": {
         "prefix": "ES",
@@ -653,7 +653,7 @@
             "ES"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_ET1": {
         "prefix": "ET1",
@@ -661,7 +661,7 @@
             "ET1"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_EX1": {
         "prefix": "EX1",
@@ -669,7 +669,7 @@
             "EX1"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_ET0": {
         "prefix": "ET0",
@@ -677,7 +677,7 @@
             "ET0"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_EX0": {
         "prefix": "EX0",
@@ -685,7 +685,7 @@
             "EX0"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_PS": {
         "prefix": "PS",
@@ -693,7 +693,7 @@
             "PS"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_PT1": {
         "prefix": "PT1",
@@ -701,7 +701,7 @@
             "PT1"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_PX1": {
         "prefix": "PX1",
@@ -709,7 +709,7 @@
             "PX1"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_PT0": {
         "prefix": "PT0",
@@ -717,7 +717,7 @@
             "PT0"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_PX0": {
         "prefix": "PX0",
@@ -725,7 +725,7 @@
             "PX0"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_RD": {
         "prefix": "RD",
@@ -733,7 +733,7 @@
             "RD"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_WR": {
         "prefix": "WR",
@@ -741,7 +741,7 @@
             "WR"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_T1": {
         "prefix": "T1",
@@ -749,7 +749,7 @@
             "T1"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_T0": {
         "prefix": "T0",
@@ -757,7 +757,7 @@
             "T0"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_INT1": {
         "prefix": "INT1",
@@ -765,7 +765,7 @@
             "INT1"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_INT0": {
         "prefix": "INT0",
@@ -773,7 +773,7 @@
             "INT0"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_TXD": {
         "prefix": "TXD",
@@ -781,7 +781,7 @@
             "TXD"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_RXD": {
         "prefix": "RXD",
@@ -789,7 +789,7 @@
             "RXD"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_SM0": {
         "prefix": "SM0",
@@ -797,7 +797,7 @@
             "SM0"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_SM1": {
         "prefix": "SM1",
@@ -805,7 +805,7 @@
             "SM1"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_SM2": {
         "prefix": "SM2",
@@ -813,7 +813,7 @@
             "SM2"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_REN": {
         "prefix": "REN",
@@ -821,7 +821,7 @@
             "REN"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_TB8": {
         "prefix": "TB8",
@@ -829,7 +829,7 @@
             "TB8"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_RB8": {
         "prefix": "RB8",
@@ -837,7 +837,7 @@
             "RB8"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_TI": {
         "prefix": "TI",
@@ -845,7 +845,7 @@
             "TI"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "register_RI": {
         "prefix": "RI",
@@ -853,7 +853,7 @@
             "RI"
         ],
         "scope": "a51",
-        "description": "8051 register"
+        "description": "8051 寄存器"
     },
     "type_EQU": {
         "prefix": "EQU",
@@ -861,7 +861,7 @@
             "EQU"
         ],
         "scope": "a51",
-        "description": "8051 assembly Data Type"
+        "description": "8051 汇编数据类型"
     },
     "type_SET": {
         "prefix": "SET",
@@ -869,7 +869,7 @@
             "SET"
         ],
         "scope": "a51",
-        "description": "8051 assembly Data Type"
+        "description": "8051 汇编数据类型"
     },
     "type_DATA": {
         "prefix": "DATA",
@@ -877,7 +877,7 @@
             "DATA"
         ],
         "scope": "a51",
-        "description": "8051 assembly Data Type"
+        "description": "8051 汇编数据类型"
     },
     "type_BYTE": {
         "prefix": "BYTE",
@@ -885,7 +885,7 @@
             "BYTE"
         ],
         "scope": "a51",
-        "description": "8051 assembly Data Type"
+        "description": "8051 汇编数据类型"
     },
     "type_WORD": {
         "prefix": "WORD",
@@ -893,7 +893,7 @@
             "WORD"
         ],
         "scope": "a51",
-        "description": "8051 assembly Data Type"
+        "description": "8051 汇编数据类型"
     },
     "type_BIT": {
         "prefix": "BIT",
@@ -901,7 +901,7 @@
             "BIT"
         ],
         "scope": "a51",
-        "description": "8051 assembly Data Type"
+        "description": "8051 汇编数据类型"
     },
     "type_DB": {
         "prefix": "DB",
@@ -909,7 +909,7 @@
             "DB"
         ],
         "scope": "a51",
-        "description": "8051 assembly Data Type"
+        "description": "8051 汇编数据类型"
     },
     "type_DW": {
         "prefix": "DW",
@@ -917,7 +917,7 @@
             "DW"
         ],
         "scope": "a51",
-        "description": "8051 assembly Data Type"
+        "description": "8051 汇编数据类型"
     },
     "type_DS": {
         "prefix": "DS",
@@ -925,6 +925,6 @@
             "DS"
         ],
         "scope": "a51",
-        "description": "8051 assembly Data Type"
+        "description": "8051 汇编数据类型"
     }
 }
