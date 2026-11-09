@@ -296,6 +296,60 @@ async function main() {
     const sourceDir = path.join(testRoot, 'Core', 'Src');
     fs.mkdirSync(sourceDir, { recursive: true });
     fs.writeFileSync(path.join(sourceDir, 'main.c'), 'int main(void) { return 0; }\n');
+    const buildLogPath = path.join(projectDir, '.vscode', 'uv4.log');
+    const waitForTaskCount = async (expected) => {
+        for (let attempt = 0; attempt < 100 && taskCount() < expected; attempt++) {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        assert.strictEqual(taskCount(), expected, 'missing-header repair should retry the Keil build once: ' +
+            events.filter((value) => /warning:|error:|info:|quickPick/.test(value)).slice(-7).join(' | '));
+    };
+    const displayDir = path.join(testRoot, 'SYSTEM', 'lcd');
+    fs.mkdirSync(displayDir, { recursive: true });
+    fs.writeFileSync(path.join(displayDir, 'lcd.h'), '#pragma once\n');
+    const beforeHeaderRepair = taskCount();
+    await commands.get('project.build')();
+    fs.writeFileSync(buildLogPath,
+        '..\\USER\\main.h(14): error:  #5: cannot open source input file "lcd.h": No such file or directory\n');
+    finishTask();
+    await waitForTaskCount(beforeHeaderRepair + 2);
+    assert.ok(fs.readFileSync(projectPath, 'utf8').replace(/\\/g, '/').includes(
+        path.relative(projectDir, displayDir).replace(/\\/g, '/')),
+    'a missing header in a new hardware directory should add that directory to the Keil target');
+    finishTask();
+
+    const firstHeaderDir = path.join(testRoot, 'Modules', 'First');
+    const secondHeaderDir = path.join(testRoot, 'Modules', 'Second');
+    fs.mkdirSync(firstHeaderDir, { recursive: true });
+    fs.mkdirSync(secondHeaderDir, { recursive: true });
+    fs.writeFileSync(path.join(firstHeaderDir, 'driver.h'), '#pragma once\n');
+    fs.writeFileSync(path.join(secondHeaderDir, 'driver.h'), '#pragma once\n');
+    quickPickSelection = (choice) => choice.candidate?.headerPath === path.join(secondHeaderDir, 'driver.h');
+    const beforeAmbiguousRepair = taskCount();
+    await commands.get('project.build')();
+    fs.writeFileSync(buildLogPath,
+        '..\\USER\\main.h(14): error:  #5: cannot open source input file "driver.h": No such file or directory\n');
+    finishTask();
+    await waitForTaskCount(beforeAmbiguousRepair + 2);
+    quickPickSelection = undefined;
+    assert.ok(fs.readFileSync(projectPath, 'utf8').replace(/\\/g, '/').includes(
+        path.relative(projectDir, secondHeaderDir).replace(/\\/g, '/')),
+    'duplicate header names should use the directory selected by the user');
+    assert.ok(!fs.readFileSync(projectPath, 'utf8').replace(/\\/g, '/').includes(
+        path.relative(projectDir, firstHeaderDir).replace(/\\/g, '/')),
+    'a duplicate header directory must not be guessed');
+    finishTask();
+
+    const beforeMissingHeader = taskCount();
+    await commands.get('project.build')();
+    fs.writeFileSync(buildLogPath,
+        '..\\USER\\main.h(14): error:  #5: cannot open source input file "not_copied.h": No such file or directory\n');
+    finishTask();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.strictEqual(taskCount(), beforeMissingHeader + 1,
+        'a header absent from the project must not trigger a blind build retry');
+    assert.ok(events.some((value) => value.includes('没有在当前工程目录中找到 not_copied.h')));
+
     const disabledSourcePath = path.join(sourceDir, 'disabled_auto.c');
     autoAddEnabled = false;
     fs.writeFileSync(disabledSourcePath, 'void disabled_auto(void) {}\n');

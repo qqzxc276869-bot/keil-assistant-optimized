@@ -12,6 +12,8 @@ import { Time } from '../lib/node_utility/Time';
 import { addFilesToKeilProject, addIncludeDirectoryToKeilProject, createGroupInKeilProject,
     getKeilFileType, removeFileFromKeilProject, SUPPORTED_KEIL_FILE_EXTENSIONS } from './KeilProjectEditor';
 import { CppConfiguration, updateCppConfigurationsFile } from './CppConfigWriter';
+import { findHeaderCandidates, HeaderSearchResult, headerSearchRoots,
+    missingHeadersFromBuildLog } from './HeaderPathResolver';
 
 export function activate(context: vscode.ExtensionContext) {
 
@@ -773,7 +775,65 @@ abstract class Target implements IView {
 
     }
 
-    private runTask(name: string, commands: string[]) {
+    private buildLogStamp(): { mtimeMs: number; size: number } | undefined {
+        try {
+            const stat = fs.statSync(this.uv4LogFile.path);
+            return { mtimeMs: stat.mtimeMs, size: stat.size };
+        } catch (error) { return undefined; }
+    }
+
+    private missingHeadersAfterBuild(previous?: { mtimeMs: number; size: number }): string[] {
+        const current = this.buildLogStamp();
+        if (!current || (previous && current.mtimeMs === previous.mtimeMs && current.size === previous.size)) {
+            return [];
+        }
+        try { return missingHeadersFromBuildLog(fs.readFileSync(this.uv4LogFile.path, 'utf8')); }
+        catch (error) { return []; }
+    }
+
+    private async repairMissingHeaderPaths(missing: string[]): Promise<number> {
+        const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(this.project.uvprjFile.path));
+        const sourcePaths = this.fGroups.reduce<string[]>((paths, group) =>
+            paths.concat(group.sources.map((source) => source.file.path)), []);
+        const roots = headerSearchRoots(this.project.uvprjFile.path, sourcePaths,
+            folder && folder.uri.fsPath);
+        let added = 0;
+        for (const name of missing) {
+            let found: HeaderSearchResult | undefined;
+            let rootIndex = 0;
+            for (; rootIndex < roots.length; rootIndex++) {
+                found = await findHeaderCandidates(roots[rootIndex], name);
+                if (!found.complete || found.candidates.length) { break; }
+            }
+            if (!found || !found.complete) {
+                vscode.window.showWarningMessage(`查找 ${name} 时搜索范围过大或无法读取，请手动检查头文件目录。`);
+                continue;
+            }
+            if (!found.candidates.length) {
+                vscode.window.showWarningMessage(`没有在当前工程目录中找到 ${name}，请确认头文件已复制到工程中。`);
+                continue;
+            }
+            let selected = found.candidates.length === 1 && rootIndex === 0 ? found.candidates[0] : undefined;
+            if (!selected) {
+                const choice = await vscode.window.showQuickPick(found.candidates.map((candidate) => ({
+                    label: node_path.relative(roots[rootIndex], candidate.headerPath),
+                    description: candidate.headerPath,
+                    candidate
+                })), { placeHolder: `找到多个位置或工程外的 ${name}，请选择要使用的头文件` });
+                selected = choice && choice.candidate;
+            }
+            if (!selected) { continue; }
+            const result = await addIncludeDirectoryToKeilProject(this.project.uvprjFile.path,
+                this.targetName, selected.includeDirectory);
+            if (result.status === 'created') { added++; }
+            else {
+                vscode.window.showWarningMessage(`${name} 所在目录已在 ${this.targetName} 的 Keil 搜索路径中，请检查文件名和编译目标。`);
+            }
+        }
+        return added;
+    }
+
+    private runTask(name: string, commands: string[], repairPasses: number = 0) {
 
         const resManager = ResourceManager.getInstance();
         const builderPath = resManager.getBuilderExe();
@@ -798,11 +858,27 @@ abstract class Target implements IView {
             return;
         }
         Target.runningTasks.set(taskKey, name);
+        const previousLog = this.buildLogStamp();
         let released = false;
         const release = () => {
             if (released) { return; }
             released = true;
             Target.runningTasks.delete(taskKey);
+        };
+        const finish = () => {
+            this.updateSourceRefs();
+            const missing = repairPasses > 0 ? this.missingHeadersAfterBuild(previousLog) : [];
+            if (!missing.length) { release(); return; }
+            this.repairMissingHeaderPaths(missing).then((added) => {
+                release();
+                if (!added) { return; }
+                vscode.window.showInformationMessage(`已为 ${this.targetName} 补充 ${added} 个头文件搜索路径，正在重新编译。`);
+                const fresh = (this.project as KeilProject).getTargetByName(this.targetName);
+                if (fresh && !fresh.closed) { fresh.runTask(name, commands, repairPasses - 1); }
+            }, (error) => {
+                release();
+                vscode.window.showWarningMessage(`自动修复头文件搜索路径失败：${(<Error>error).message}`);
+            });
         };
 
         // use task
@@ -824,8 +900,7 @@ abstract class Target implements IView {
                 endSubscription = vscode.tasks.onDidEndTask((event) => {
                     if (event.execution.task.definition.runId !== runId) { return; }
                     if (endSubscription) { endSubscription.dispose(); }
-                    release();
-                    this.updateSourceRefs();
+                    finish();
                 });
                 vscode.tasks.executeTask(task).then(undefined, (error) => {
                     if (endSubscription) { endSubscription.dispose(); }
@@ -858,9 +933,8 @@ abstract class Target implements IView {
                     vscode.window.showErrorMessage(`Keil ${name}启动失败：${error.message}`);
                 });
                 processHandle.on('close', (code, signal) => {
-                    release();
                     output.appendLine(`Keil ${name}已结束，退出码 ${code === null ? '未知' : code}${signal ? `（信号 ${signal}）` : ''}。`);
-                    this.updateSourceRefs();
+                    finish();
                 });
             } catch (error) {
                 release();
@@ -871,11 +945,11 @@ abstract class Target implements IView {
     }
 
     build() {
-        this.runTask('编译', this.getBuildCommand());
+        this.runTask('编译', this.getBuildCommand(), 3);
     }
 
     rebuild() {
-        this.runTask('重新编译', this.getRebuildCommand());
+        this.runTask('重新编译', this.getRebuildCommand(), 3);
     }
 
     download() {

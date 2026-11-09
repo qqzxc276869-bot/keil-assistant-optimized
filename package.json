@@ -2,7 +2,7 @@
     "name": "keil-assistant-optimized",
     "displayName": "Keil 助手（优化版）",
     "description": "在 VS Code 中管理和编译 Keil uVision 工程",
-    "version": "1.7.11",
+    "version": "1.7.12",
     "publisher": "qqzxc276869-bot",
     "author": {
         "name": "Goal",
@@ -378,7 +378,7 @@
         "build": "node scripts/build.js",
         "check": "node scripts/check.js",
         "pretest": "npm run build",
-        "test": "node scripts/smoke.js && node scripts/test_cpp_config.js"
+        "test": "node scripts/smoke.js && node scripts/test_cpp_config.js && node scripts/test_header_path_resolver.js"
     },
     "devDependencies": {
         "@types/node": "^12.11.7",

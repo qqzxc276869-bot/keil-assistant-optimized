@@ -2,6 +2,14 @@
 
 All notable changes to the "keil-assistant" extension will be documented in this file.
 
+## [v1.7.12] Repair missing Keil header paths
+- Parse actual Keil missing-header build errors, find the header in the current project's source tree, and add the matching directory to that target's `IncludePath`
+- Retry the build automatically after repairing paths, with a three-retry limit
+- Ask the user when header names are duplicated or the match is only in the wider workspace; report files that are absent
+- Cover ARMCC, GCC, and C51 diagnostic forms and verify unique, ambiguous, and missing-header build flows
+
+***
+
 ## [v1.7.11] Chinese interface text
 - Translate Keil command titles, context menus, settings, and project view labels into Chinese, including **从 Keil 工程移除文件引用** and **清除自动添加的文件夹分组记录**
 - Translate runtime notifications, file and group selection prompts, project-editing and C/C++ configuration errors, and A51 completion descriptions
