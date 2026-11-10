@@ -1991,9 +1991,32 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
                 `原先记录的分组不可用。请打开 ${mapping.projectPath}，或运行“清除自动添加的文件夹分组记录”。`);
             return undefined;
         }
-        const choices = exact.length ? exact : related;
-        if (exact.length === 1) { return exact[0]; }
-        if (!exact.length) {
+        // A Keil group can contain files from several physical subfolders. If an
+        // existing group's name matches a parent folder, use it before an exact
+        // match from an accidentally created leaf group.
+        const workspace = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(sourcePath));
+        const parentMatches: Array<{ choice: AutoAddDestination; distance: number }> = [];
+        for (const choice of related) {
+            let parent = node_path.dirname(directory);
+            let distance = 1;
+            while (parent !== node_path.dirname(parent) && (!workspace ||
+                isPathAtOrUnder(parent, workspace.uri.fsPath))) {
+                if (node_path.basename(parent).toLowerCase() === choice.group.label.toLowerCase() &&
+                    choice.group.sources.every((source) =>
+                        isPathAtOrUnder(source.file.path, parent))) {
+                    parentMatches.push({ choice, distance });
+                    break;
+                }
+                parent = node_path.dirname(parent);
+                distance++;
+            }
+        }
+        const nearest = parentMatches.length ? Math.min(...parentMatches.map((match) => match.distance)) : 0;
+        const parentChoices = parentMatches.filter((match) => match.distance === nearest)
+            .map((match) => match.choice);
+        const choices = parentChoices.length ? parentChoices : exact.length ? exact : related;
+        if (choices.length === 1 && (parentChoices.length || exact.length === 1)) { return choices[0]; }
+        if (!parentChoices.length && !exact.length) {
             const folderName = node_path.basename(node_path.dirname(sourcePath));
             const named = related.filter((choice) => choice.group.label.toLowerCase() === folderName.toLowerCase());
             if (named.length === 1) { return named[0]; }

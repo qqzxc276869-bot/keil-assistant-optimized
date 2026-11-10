@@ -605,6 +605,36 @@ async function main() {
     assert.strictEqual(referenceCount('hardware_driver.h'), 0,
         'folder sync should add only C files, not sibling headers');
 
+    const { createGroupInKeilProject, addFileToKeilProject } =
+        require(path.join(extensionRoot, 'dist', 'src', 'KeilProjectEditor'));
+    const systemDir = path.join(testRoot, 'SYSTEM');
+    const delayDir = path.join(systemDir, 'delay');
+    const sysDir = path.join(systemDir, 'sys');
+    const lcdDir = path.join(systemDir, 'lcd');
+    for (const directory of [delayDir, sysDir, lcdDir]) { fs.mkdirSync(directory, { recursive: true }); }
+    const delaySource = path.join(delayDir, 'delay.c');
+    const sysSource = path.join(sysDir, 'sys.c');
+    const oldLeafSource = path.join(lcdDir, 'old_leaf.c');
+    for (const source of [delaySource, sysSource, oldLeafSource]) { fs.writeFileSync(source, 'void f(void) {}\n'); }
+    await createGroupInKeilProject(projectPath, 'Target 1', 'SYSTEM');
+    await addFileToKeilProject(projectPath, 'Target 1', 'SYSTEM', delaySource);
+    await addFileToKeilProject(projectPath, 'Target 1', 'SYSTEM', sysSource);
+    await createGroupInKeilProject(projectPath, 'Target 1', 'lcd');
+    await addFileToKeilProject(projectPath, 'Target 1', 'lcd', oldLeafSource);
+    await projects[0].reload();
+    const nestedSource = path.join(lcdDir, 'lcd_new.c');
+    fs.writeFileSync(nestedSource, 'void lcd_new(void) {}\n');
+    await fireExternalCreated(nestedSource);
+    await waitForReference('lcd_new.c');
+    assert.strictEqual(await groupForFile('lcd_new.c'), 'SYSTEM',
+        'a parent SYSTEM group should win over a wrongly created same-directory leaf group');
+    const wrongLeafGroup = provider.getChildren(provider.getChildren(projects[0])[0])
+        .find((item) => item.label === 'lcd');
+    await commands.get('project.removeGroup')(wrongLeafGroup);
+    await commands.get('project.syncFolder')(vscode.Uri.file(systemDir));
+    assert.strictEqual(await groupForFile('old_leaf.c'), 'SYSTEM',
+        'deleting the wrong group and rescanning SYSTEM should repair old references');
+
     const unknownDir = path.join(testRoot, 'Core', 'NewAuto');
     const unknownPath = path.join(unknownDir, 'auto_unknown_directory.c');
     fs.mkdirSync(unknownDir, { recursive: true });
