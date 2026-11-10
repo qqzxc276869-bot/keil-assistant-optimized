@@ -1,8 +1,8 @@
 {
     "name": "keil-assistant-optimized",
-    "displayName": "Keil 助手（优化版）",
+    "displayName": "Keil Assistant (优化版)",
     "description": "在 VS Code 中管理和编译 Keil uVision 工程",
-    "version": "1.7.12",
+    "version": "1.7.21",
     "publisher": "qqzxc276869-bot",
     "author": {
         "name": "Goal",
@@ -44,6 +44,9 @@
         "onCommand:project.build",
         "onCommand:project.rebuild",
         "onCommand:project.download",
+        "onCommand:project.buildAndDownload",
+        "onCommand:project.rebuildAndDownload",
+        "onCommand:project.selectActiveTarget",
         "onCommand:item.copyValue"
     ],
     "icon": "res/icons/icon.png",
@@ -58,7 +61,7 @@
     "contributes": {
         "configuration": [
             {
-                "title": "Keil 助手",
+                "title": "Keil Assistant",
                 "properties": {
                     "KeilAssistant.C51.Uv4Path": {
                         "type": "string",
@@ -175,6 +178,26 @@
                 }
             },
             {
+                "command": "project.buildAndDownload",
+                "title": "编译并下载到设备",
+                "icon": {
+                    "light": "./res/icons/BuildDownload_16x-light.svg",
+                    "dark": "./res/icons/BuildDownload_16x.svg"
+                }
+            },
+            {
+                "command": "project.rebuildAndDownload",
+                "title": "重新编译并下载到设备",
+                "icon": {
+                    "light": "./res/icons/RebuildDownload_16x-light.svg",
+                    "dark": "./res/icons/RebuildDownload_16x.svg"
+                }
+            },
+            {
+                "command": "project.selectActiveTarget",
+                "title": "选择当前 Keil 工程和编译目标"
+            },
+            {
                 "command": "item.copyValue",
                 "title": "复制条目内容",
                 "icon": {
@@ -219,6 +242,16 @@
                     "command": "project.forgetAutoAddFolder",
                     "group": "1_keil@1",
                     "when": "view == project"
+                },
+                {
+                    "command": "project.buildAndDownload",
+                    "group": "navigation@3",
+                    "when": "view == project"
+                },
+                {
+                    "command": "project.rebuildAndDownload",
+                    "group": "navigation@4",
+                    "when": "view == project"
                 }
             ],
             "view/item/context": [
@@ -259,6 +292,16 @@
                 },
                 {
                     "command": "project.download",
+                    "group": "inline",
+                    "when": "viewItem == Target"
+                },
+                {
+                    "command": "project.buildAndDownload",
+                    "group": "inline",
+                    "when": "viewItem == Target"
+                },
+                {
+                    "command": "project.rebuildAndDownload",
                     "group": "inline",
                     "when": "viewItem == Target"
                 },

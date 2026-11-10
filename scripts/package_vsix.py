@@ -1,4 +1,4 @@
-"""Package the locally built Keil Assistant without a registry download."""
+"""Create the single local VSIX installer without publishing it."""
 
 import json
 import shutil
@@ -10,7 +10,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 ROOT = Path(__file__).resolve().parent.parent
 PACKAGE = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
-OUTPUT = ROOT / f"keil-assistant-{PACKAGE['version']}-optimized.vsix"
+OUTPUT = ROOT / f"keil-assistant-{PACKAGE['version']}.vsix"
 
 # Never leave a same-version package that predates the current source tree.
 if OUTPUT.is_file():

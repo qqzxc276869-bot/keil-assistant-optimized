@@ -1,5 +1,7 @@
 .vscode/**
 .vscode-test/**
+.keil-assistant-smoke-*/**
+*.log.lock
 src/test/**
 src/**
 vsc-extension-quickstart.md

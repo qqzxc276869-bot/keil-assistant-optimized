@@ -37,7 +37,11 @@ let lastOpenDialogOptions;
 let quickPickSelection;
 let taskStartError;
 let autoAddEnabled = true;
+let saveAllResult = true;
 const taskEndListeners = new Set();
+const taskProcessEndListeners = new Set();
+const statusItems = [];
+const progressRuns = [];
 const createFileListeners = new Set();
 const saveDocumentListeners = new Set();
 const renameFileListeners = new Set();
@@ -51,15 +55,24 @@ childProcess.spawn = (executable, args, options) => {
     events.push('process');
     return handle;
 };
-const finishTask = (task = latestTask) => {
+const finishTask = (task = latestTask, exitCode = 0) => {
+    for (const listener of Array.from(taskProcessEndListeners)) {
+        listener({ execution: { task }, exitCode });
+    }
     for (const listener of Array.from(taskEndListeners)) { listener({ execution: { task } }); }
 };
 const folder = { name: 'outer', uri: { fsPath: testRoot } };
 const vscode = {
     Uri: { file: (filePath) => ({ scheme: 'file', fsPath: filePath }) },
     EventEmitter: class {
-        constructor() { this.event = () => ({ dispose() {} }); }
-        fire() {}
+        constructor() {
+            this.listeners = new Set();
+            this.event = (listener) => {
+                this.listeners.add(listener);
+                return { dispose: () => this.listeners.delete(listener) };
+            };
+        }
+        fire(value) { for (const listener of this.listeners) { listener(value); } }
     },
     commands: {
         registerCommand: (name, callback) => { commands.set(name, callback); return { dispose() {} }; },
@@ -91,9 +104,22 @@ const vscode = {
             deleteFileListeners.add(listener);
             return { dispose: () => deleteFileListeners.delete(listener) };
         },
-        saveAll: async () => { events.push('save'); return true; }
+        saveAll: async () => { events.push('save'); return saveAllResult; }
     },
     window: {
+        withProgress: (options, task) => {
+            const run = { options, reports: [], active: true };
+            progressRuns.push(run);
+            const progress = { report: (value) => run.reports.push(value) };
+            try { return Promise.resolve(task(progress, {})).finally(() => { run.active = false; }); }
+            catch (error) { run.active = false; return Promise.reject(error); }
+        },
+        createStatusBarItem: (_alignment, priority) => {
+            const item = { priority, visible: false, show() { this.visible = true; },
+                hide() { this.visible = false; }, dispose() {} };
+            statusItems.push(item);
+            return item;
+        },
         registerTreeDataProvider: (_name, treeProvider) => { provider = treeProvider; return { dispose() {} }; },
         showOpenDialog: async (options) => {
             lastOpenDialogOptions = options;
@@ -110,6 +136,10 @@ const vscode = {
             return options.find((option) => typeof option === 'string' && /remove/i.test(option));
         },
         showInformationMessage: (message) => { events.push(`info:${message}`); },
+        setStatusBarMessage: (message, timeout) => {
+            events.push(`status:${message}:${timeout}`);
+            return { dispose() {} };
+        },
         createOutputChannel: () => ({
             append: (text) => outputLines.push(text),
             appendLine: (text) => outputLines.push(`${text}\n`),
@@ -127,10 +157,16 @@ const vscode = {
         constructor(definition, _scope, name) { this.definition = definition; this.name = name; }
     },
     TaskScope: { Global: 1 },
+    StatusBarAlignment: { Left: 1 },
+    ProgressLocation: { Notification: 15, Window: 10 },
     ProcessExecution: class {
         constructor(executable, args, options) { this.executable = executable; this.args = args; this.options = options; }
     },
     tasks: {
+        onDidEndTaskProcess: (listener) => {
+            taskProcessEndListeners.add(listener);
+            return { dispose: () => taskProcessEndListeners.delete(listener) };
+        },
         onDidEndTask: (listener) => {
             taskEndListeners.add(listener);
             return { dispose: () => taskEndListeners.delete(listener) };
@@ -206,6 +242,15 @@ async function groupForFile(fileName) {
 }
 
 async function main() {
+    const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'package.json'), 'utf8'));
+    for (const command of ['project.buildAndDownload', 'project.rebuildAndDownload']) {
+        assert.ok(manifest.contributes.menus['view/title'].some((entry) => entry.command === command &&
+            entry.group.startsWith('navigation')), `${command} should be visible in the Keil view toolbar`);
+        assert.ok(manifest.contributes.menus['view/item/context'].some((entry) => entry.command === command &&
+            entry.group === 'inline'), `${command} should be visible on a Keil target row`);
+        const icon = manifest.contributes.commands.find((entry) => entry.command === command)?.icon?.light;
+        assert.ok(icon && fs.existsSync(path.join(extensionRoot, icon)), `${command} needs a visible icon`);
+    }
     const extension = require(path.join(extensionRoot, 'dist', 'src', 'extension'));
     const context = {
         extensionPath: extensionRoot,
@@ -216,12 +261,22 @@ async function main() {
         }
     };
     extension.activate(context);
+    assert.strictEqual(statusItems.length, 5);
+    assert.strictEqual(statusItems[0].command, 'explorer.open');
+    assert.strictEqual(statusItems[0].visible, true);
+    assert.ok(statusItems.slice(1).every((item) => !item.visible));
     for (let i = 0; i < 100 && provider.getChildren().length === 0; i++) {
         await new Promise((resolve) => setTimeout(resolve, 10));
     }
     const projects = provider.getChildren();
     assert.strictEqual(projects.length, 1, 'nested project should load');
     assert.strictEqual(projects[0].uvprjFile.path, projectPath);
+    assert.ok(statusItems[0].text.includes('Target 1'));
+    assert.ok(statusItems.slice(1).every((item) => item.visible));
+    assert.deepStrictEqual(statusItems.slice(1).map((item) => item.command),
+        ['project.build', 'project.rebuild', 'project.buildAndDownload', 'project.rebuildAndDownload']);
+    assert.ok(statusItems[3].text.includes('编译下载'));
+    assert.ok(statusItems[4].text.includes('重新编译下载'));
     const uncPath = '\\\\server\\share\\include\\board.h';
     assert.strictEqual(projects[0].toAbsolutePath(uncPath), path.normalize(uncPath),
         'UNC include paths must remain absolute');
@@ -262,10 +317,20 @@ async function main() {
 
     await commands.get('project.build')();
     assert.ok(events.indexOf('save') < events.indexOf('task'), 'save should precede build');
+    const firstBuildProgress = progressRuns[progressRuns.length - 1];
+    assert.strictEqual(firstBuildProgress.options.location, vscode.ProgressLocation.Window);
+    assert.ok(firstBuildProgress.reports.some((report) => report.message.includes('编译进度 0%：正在编译')),
+        'build activity should show progress in the bottom status bar');
+    await new Promise((resolve) => setTimeout(resolve, 380));
+    assert.ok(firstBuildProgress.reports.some((report) => /编译进度 [1-9][0-9]?%：正在编译/.test(report.message)),
+        'the percentage should advance while Keil is still compiling');
+    assert.ok(!firstBuildProgress.reports.some((report) => report.message.includes('编译进度 100%')),
+        'an unfinished build must not show 100%');
     assert.strictEqual(latestTask.execution.options.cwd, projectDir);
     assert.strictEqual(latestTask.execution.args[latestTask.execution.args.indexOf('--prjPath') + 1], projectPath);
     const firstBuild = latestTask;
     const taskCount = () => events.filter((value) => value === 'task').length;
+    const buildLogPath = path.join(projectDir, '.vscode', 'uv4.log');
     const firstTaskCount = taskCount();
     await commands.get('project.rebuild')();
     await commands.get('project.download')();
@@ -276,9 +341,117 @@ async function main() {
     assert.strictEqual(taskCount(), firstTaskCount, 'a project reload must not release a still-running task lock');
     finishTask(firstBuild);
     assert.strictEqual(taskEndListeners.size, 0, 'task end listener should be disposed');
+    assert.strictEqual(taskProcessEndListeners.size, 0, 'process end listener should be disposed');
     await commands.get('project.build')(projects[0]);
     assert.strictEqual(taskCount(), firstTaskCount + 1, 'project tree build should use its active target after task end');
     finishTask();
+    const beforeFailedWorkflow = taskCount();
+    const failedWorkflow = commands.get('project.buildAndDownload')();
+    for (let attempt = 0; attempt < 20 && taskCount() === beforeFailedWorkflow; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.strictEqual(taskCount(), beforeFailedWorkflow + 1);
+    const failedBuildProgress = progressRuns[progressRuns.length - 1];
+    finishTask(latestTask, 1);
+    await failedWorkflow;
+    assert.strictEqual(taskCount(), beforeFailedWorkflow + 1, 'a failed build must not start flashing');
+    assert.ok(!failedBuildProgress.reports.some((report) => report.message.includes('编译进度 100%')),
+        'a failed build must keep its last percentage');
+    assert.ok(events.some((value) => value.includes('编译未成功，已取消下载')));
+
+    const beforeSuccessfulWorkflow = taskCount();
+    const successfulWorkflow = commands.get('project.buildAndDownload')();
+    for (let attempt = 0; attempt < 20 && taskCount() === beforeSuccessfulWorkflow; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.strictEqual(taskCount(), beforeSuccessfulWorkflow + 1);
+    const successfulBuildProgress = progressRuns[progressRuns.length - 1];
+    // Uv4Caller translates Keil's warning-only exit code 1 to success (0).
+    finishTask(latestTask, 0);
+    for (let attempt = 0; attempt < 20 && taskCount() === beforeSuccessfulWorkflow + 1; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.strictEqual(taskCount(), beforeSuccessfulWorkflow + 2,
+        'a build with warnings may start download');
+    assert.ok(successfulBuildProgress.reports.some((report) => report.message.includes('编译进度 100%：编译完成')),
+        'only a successful build should finish at 100%');
+    assert.ok(latestTask.execution.args.some((arg) => arg.includes(' -f ')),
+        'the second task should flash the target');
+    const buildDownloadProgress = progressRuns[progressRuns.length - 1];
+    assert.strictEqual(buildDownloadProgress.options.location, vscode.ProgressLocation.Window);
+    assert.strictEqual(buildDownloadProgress.active, true, 'download progress should remain visible while flashing');
+    assert.ok(buildDownloadProgress.reports.some((report) => report.message.includes('阶段 0%')));
+    fs.writeFileSync(buildLogPath, 'Load "Objects/Project.axf"\nErase Done.');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.ok(buildDownloadProgress.reports.some((report) => report.increment === 33 &&
+        report.message.includes('阶段 33%：擦除完成，正在写入') && report.message.includes('▰▰▰')));
+    fs.appendFileSync(buildLogPath, 'Programming Done.');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.ok(buildDownloadProgress.reports.some((report) => report.increment === 34 &&
+        report.message.includes('阶段 67%：写入完成，正在校验') && report.message.includes('▰▰▰▰▰▰▰')));
+    fs.appendFileSync(buildLogPath, 'Verify OK.');
+    finishTask();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.strictEqual(buildDownloadProgress.active, true,
+        'a fast download should keep the completed progress visible briefly');
+    await successfulWorkflow;
+    assert.ok(buildDownloadProgress.reports.some((report) => report.increment === 33 &&
+        report.message.includes('阶段 100%：校验完成')));
+    assert.strictEqual(buildDownloadProgress.active, false, 'download progress should close when flashing ends');
+    assert.ok(events.some((value) => value.includes('下载命令已完成')));
+    assert.ok(events.some((value) => value.includes('Keil 下载阶段 100%：已完成')));
+
+    const beforeRebuildWorkflow = taskCount();
+    const rebuildWorkflow = commands.get('project.rebuildAndDownload')();
+    for (let attempt = 0; attempt < 20 && taskCount() === beforeRebuildWorkflow; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.strictEqual(taskCount(), beforeRebuildWorkflow + 1);
+    assert.ok(latestTask.execution.args.some((arg) => arg.includes(' -r ')),
+        'rebuild-and-download must run a full rebuild');
+    finishTask();
+    for (let attempt = 0; attempt < 20 && taskCount() === beforeRebuildWorkflow + 1; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.strictEqual(taskCount(), beforeRebuildWorkflow + 2);
+    assert.ok(latestTask.execution.args.some((arg) => arg.includes(' -f ')),
+        'rebuild-and-download should flash only after rebuilding');
+    const rebuildDownloadProgress = progressRuns[progressRuns.length - 1];
+    assert.strictEqual(rebuildDownloadProgress.active, true);
+    finishTask();
+    await rebuildWorkflow;
+    assert.strictEqual(rebuildDownloadProgress.active, false);
+
+    const beforeFailedRebuild = taskCount();
+    const failedRebuild = commands.get('project.rebuildAndDownload')();
+    for (let attempt = 0; attempt < 20 && taskCount() === beforeFailedRebuild; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.strictEqual(taskCount(), beforeFailedRebuild + 1);
+    finishTask(latestTask, 1);
+    await failedRebuild;
+    assert.strictEqual(taskCount(), beforeFailedRebuild + 1,
+        'a failed full rebuild must not start flashing');
+    assert.ok(events.some((value) => value.includes('重新编译未成功，已取消下载')));
+    const beforeUnknownResult = taskCount();
+    const unknownResultWorkflow = commands.get('project.buildAndDownload')();
+    for (let attempt = 0; attempt < 20 && taskCount() === beforeUnknownResult; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.strictEqual(taskCount(), beforeUnknownResult + 1);
+    for (const listener of Array.from(taskEndListeners)) {
+        listener({ execution: { task: latestTask } });
+    }
+    await unknownResultWorkflow;
+    assert.strictEqual(taskCount(), beforeUnknownResult + 1,
+        'a task without a process exit result must not start flashing');
+    assert.strictEqual(taskProcessEndListeners.size, 0);
+    const beforeUnsavedWorkflow = taskCount();
+    saveAllResult = false;
+    await commands.get('project.buildAndDownload')();
+    saveAllResult = true;
+    assert.strictEqual(taskCount(), beforeUnsavedWorkflow, 'unsaved files must prevent flashing');
+    assert.ok(events.some((value) => value.includes('文件未保存，已取消 Keil 编译和下载')));
     taskStartError = new Error('test task start failure');
     await commands.get('project.build')();
     await new Promise((resolve) => setImmediate(resolve));
@@ -296,7 +469,6 @@ async function main() {
     const sourceDir = path.join(testRoot, 'Core', 'Src');
     fs.mkdirSync(sourceDir, { recursive: true });
     fs.writeFileSync(path.join(sourceDir, 'main.c'), 'int main(void) { return 0; }\n');
-    const buildLogPath = path.join(projectDir, '.vscode', 'uv4.log');
     const waitForTaskCount = async (expected) => {
         for (let attempt = 0; attempt < 100 && taskCount() < expected; attempt++) {
             await new Promise((resolve) => setTimeout(resolve, 20));
@@ -308,15 +480,23 @@ async function main() {
     fs.mkdirSync(displayDir, { recursive: true });
     fs.writeFileSync(path.join(displayDir, 'lcd.h'), '#pragma once\n');
     const beforeHeaderRepair = taskCount();
-    await commands.get('project.build')();
+    const repairedWorkflow = commands.get('project.buildAndDownload')();
+    await waitForTaskCount(beforeHeaderRepair + 1);
     fs.writeFileSync(buildLogPath,
         '..\\USER\\main.h(14): error:  #5: cannot open source input file "lcd.h": No such file or directory\n');
-    finishTask();
+    finishTask(latestTask, 1);
     await waitForTaskCount(beforeHeaderRepair + 2);
+    assert.ok(latestTask.execution.args.some((arg) => arg.includes(' -b ')),
+        'header-path repair should retry the build before flashing');
     assert.ok(fs.readFileSync(projectPath, 'utf8').replace(/\\/g, '/').includes(
         path.relative(projectDir, displayDir).replace(/\\/g, '/')),
     'a missing header in a new hardware directory should add that directory to the Keil target');
     finishTask();
+    await waitForTaskCount(beforeHeaderRepair + 3);
+    assert.ok(latestTask.execution.args.some((arg) => arg.includes(' -f ')),
+        'the repaired build should finish before downloading');
+    finishTask();
+    await repairedWorkflow;
 
     const firstHeaderDir = path.join(testRoot, 'Modules', 'First');
     const secondHeaderDir = path.join(testRoot, 'Modules', 'Second');
@@ -689,6 +869,8 @@ async function main() {
         'task completion should release the lock after project close and reopen');
     finishTask();
     await commands.get('project.close')(reopenedProject);
+    assert.strictEqual(statusItems[0].command, 'explorer.open');
+    assert.ok(statusItems.slice(1).every((item) => !item.visible));
 
     const secondPath = path.join(testRoot, 'Second.uvprojx');
     const secondXml = fs.readFileSync(projectPath, 'utf8')
@@ -715,6 +897,15 @@ async function main() {
     dialogSelection = vscode.Uri.file(projectPath);
     await commands.get('explorer.open')();
     assert.strictEqual(provider.getChildren().length, 2, 'two projects should be available for command palette selection');
+    quickPickSelection = (choice) => choice.project?.uvprjFile.path === projectPath &&
+        choice.target?.targetName === 'Target 1';
+    await commands.get('project.selectActiveTarget')();
+    assert.ok(statusItems[0].tooltip.includes(projectPath), 'status bar should show the selected project');
+    quickPickSelection = (choice) => choice.project?.uvprjFile.path === secondPath &&
+        choice.target?.targetName === 'Target 1';
+    await commands.get('project.selectActiveTarget')();
+    assert.ok(statusItems[0].tooltip.includes(secondPath), 'the selected project should update the status bar');
+    quickPickSelection = undefined;
     const multiProjectAutoPath = path.join(sourceDir, 'auto_with_two_projects.c');
     const quickPicksBeforeMultiProject = events.filter((value) => value === 'quickPick').length;
     fs.writeFileSync(multiProjectAutoPath, '');
@@ -781,9 +972,39 @@ async function main() {
     assert.ok(outputLines.join('').includes('stdout sample'));
     assert.ok(outputLines.join('').includes('stderr sample'));
     assert.ok(outputLines.join('').includes('退出码 3'));
+    const directDownloadMessages = events.filter((value) => value.includes('下载命令已完成')).length;
     await commands.get('project.download')();
     assert.strictEqual(processCount(), initialProcessCount + 1, 'process close should release the no-workspace task lock');
+    const directDownloadProgress = progressRuns[progressRuns.length - 1];
+    assert.strictEqual(directDownloadProgress.active, true, 'direct download should show progress');
     latestProcess.handle.emit('close', 0, null);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.strictEqual(directDownloadProgress.active, true,
+        'a fast direct download should keep its completion visible briefly');
+    for (let attempt = 0; attempt < 30 && directDownloadProgress.active; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.strictEqual(directDownloadProgress.active, false);
+    assert.strictEqual(events.filter((value) => value.includes('下载命令已完成')).length,
+        directDownloadMessages + 1, 'direct download should report completion in Chinese');
+    await commands.get('project.download')();
+    const failedDownloadProgress = progressRuns[progressRuns.length - 1];
+    const failedDownloadLog = path.join(path.dirname(secondPath), '.vscode', 'uv4.log');
+    fs.writeFileSync(failedDownloadLog,
+        'Load "Objects/Project.axf"\nError: Flash Download failed  -  Target DLL has been cancelled\n');
+    latestProcess.handle.emit('close', 0, null);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.strictEqual(failedDownloadProgress.active, true,
+        'failed downloads should keep the percentage visible briefly');
+    for (let attempt = 0; attempt < 30 && failedDownloadProgress.active; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.strictEqual(failedDownloadProgress.active, false);
+    assert.ok(failedDownloadProgress.reports.some((report) =>
+        report.message.includes('阶段 0%：下载失败')));
+    assert.ok(!failedDownloadProgress.reports.some((report) => report.message.includes('阶段 100%')),
+        'a Keil flash error must not be reported as completed');
+    assert.ok(events.some((value) => value.includes('Keil 下载失败（阶段 0%）')));
     await commands.get('project.build')();
     latestProcess.handle.emit('error', new Error('test process start failure'));
     assert.ok(events.some((value) => value.includes('Keil 编译启动失败：test process start failure')));
@@ -819,7 +1040,7 @@ async function main() {
     assert.strictEqual(provider.getChildren().length, 0);
     assert.strictEqual(referenceCount('auto_without_open_project.c'), 0,
         'automatic addition must not reopen or edit a closed Keil project');
-    console.log('Smoke test passed: discovery, auto-add, command palette, task lifecycle, build cwd, IntelliSense, watcher, project editing, close/F7.');
+    console.log('Smoke test passed: discovery, auto-add, status bar, build/rebuild-then-download, Chinese download progress, task lifecycle, build cwd, IntelliSense, watcher, project editing, close/F7.');
     await require('./test_project_edit').run(extensionRoot);
 }
 

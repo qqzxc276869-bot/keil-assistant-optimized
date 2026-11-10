@@ -1,4 +1,4 @@
-# Keil Assistant (Optimized)
+# Keil Assistant (优化版)
 
 This repository is maintained by [Goal / qqzxc276869-bot](https://github.com/qqzxc276869-bot) and builds on the [original Keil Assistant](https://github.com/github0null/keil-assistant). It improves nested-project discovery, VS Code builds, and project-file management. The original was developed by cl under the [MIT License](./LICENSE); this repository retains its copyright and license notice. This optimized build is separate from the original author's VS Code Marketplace release.
 
@@ -9,17 +9,17 @@ The original workflow required creating groups and adding files in Keil, then sa
 | Area | Improvements |
 | --- | --- |
 | Project discovery | Recursively find nested `.uvproj` / `.uvprojx` files, choose among projects by path, remember manually opened projects, and keep the outer source workspace open. |
-| Builds | Save edited VS Code files before build or rebuild, run `UV4.exe` from the project directory, validate its path, and prevent overlapping tasks for one project. |
+| Builds | Show the active project and target in the status bar with build, rebuild, build-then-download, and rebuild-then-download actions. Save files before building, require a successful build before flashing, and prevent overlapping tasks. |
 | Project management | Create Keil groups, add several existing C/C++, assembly, header, or library files to a chosen target and group at once, add newly created files by directory, remove project references without deleting disk files, and add header directories to the chosen target's IncludePath. |
 | Editor configuration | Place C/C++ IntelliSense settings in the workspace containing the project while preserving JSONC comments and user configurations. |
 
 Builds and downloads still use the locally installed Keil tools. Groups and file references can be managed in VS Code.
 
-## Install this modified build
+## Install locally
 
-Download the `.vsix` from this repository's [Releases](https://github.com/qqzxc276869-bot/keil-assistant-optimized/releases), then run **Extensions: Install from VSIX...** in VS Code 1.41 or newer. Previously published VSIX packages remain available in their respective releases. This build's extension ID is `qqzxc276869-bot.keil-assistant-optimized`. If the original `cl.keil-assistant` is installed, disable it first to avoid two extensions handling the same shortcuts and project view.
+Install Node.js and Python. In the repository directory, run `npm ci` and `npm test`, then run `python scripts/package_vsix.py`. The script checks and builds the extension, then creates one local installer named `keil-assistant-<version>.vsix` in the repository directory. It does not create a separate Marketplace package. Packaging a new version does not delete installers for older versions.
 
-To build from source, install Node.js and Python, run `npm ci`, `npm run check`, and `npm test`, then run `python scripts/package_vsix.py` to produce a VSIX.
+In VS Code 1.41 or newer, run **Extensions: Install from VSIX...** and select that file. This build's extension ID is `qqzxc276869-bot.keil-assistant-optimized`. If the original `cl.keil-assistant` is installed, disable it first to avoid two extensions handling the same shortcuts and project view.
 
 ## [简体中文](./README.md)
 
@@ -40,7 +40,9 @@ Keil Assistant displays Keil C51/ARM projects in VS Code and uses Keil uVision t
 
 ## Common operations
 
-- **Build, rebuild, download**: Use the buttons in the project view. `F7` builds the active target; `Ctrl+Alt+F7` rebuilds it. Unsaved VS Code files are saved before a build. Attempting another task for the same project while one is running shows a warning. The Keil build output is the authority for compilation results.
+- **Quick actions**: Click the status bar project and target label to switch among loaded Keil projects and targets. The status bar has build, rebuild, build then download, and rebuild then download actions. Both download sequences also appear in the Keil project view toolbar and on target rows. With no project loaded, the label opens one.
+
+- **Build, rebuild, download**: The existing project-view buttons remain available. `F7` builds the active target, `Ctrl+Alt+F7` rebuilds, and `Ctrl+Alt+D` downloads directly. **编译并下载到设备** and **重新编译并下载到设备** save files and wait for a successful build or full rebuild, including any missing-header-path repair retry, before issuing Keil's `-f` download command. A failed or cancelled build stops the download. During builds, the bottom status bar shows a percentage that gradually rises to at most 95%; only a successful build shows 100%, while a failed build keeps its last value. The build percentage is estimated from elapsed time, not the proportion of files compiled. All three download paths show a bar and stage percentage in the bottom status bar: 0% at start, 33% when erase completes, 67% when programming completes, and 100% when verification completes. These are **completed download stages**, not a percentage of bytes written. A failed download does not advance to 100%. Fast completion or failure remains visible briefly, with a five-second status bar result. Check Keil's raw output for flashing results; the extension cannot independently confirm that the board is running correctly.
 
   ![build](./res/preview/build.png)
 

@@ -25,6 +25,58 @@ export function activate(context: vscode.ExtensionContext) {
     const prjExplorer = new ProjectExplorer(context);
     const subscriber = context.subscriptions;
 
+    const targetStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 40);
+    const buildStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 39);
+    const rebuildStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 38);
+    const downloadStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 37);
+    const rebuildDownloadStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 36);
+    subscriber.push(targetStatus, buildStatus, rebuildStatus, downloadStatus, rebuildDownloadStatus);
+    buildStatus.text = '$(tools)';
+    buildStatus.tooltip = '编译当前 Keil 目标';
+    buildStatus.command = 'project.build';
+    rebuildStatus.text = '$(sync)';
+    rebuildStatus.tooltip = '重新编译当前 Keil 目标';
+    rebuildStatus.command = 'project.rebuild';
+    downloadStatus.text = '$(arrow-down) 编译下载';
+    downloadStatus.tooltip = '编译成功后下载到设备';
+    downloadStatus.command = 'project.buildAndDownload';
+    rebuildDownloadStatus.text = '$(sync) 重新编译下载';
+    rebuildDownloadStatus.tooltip = '重新编译成功后下载到设备';
+    rebuildDownloadStatus.command = 'project.rebuildAndDownload';
+    const updateStatusBar = () => {
+        const selection = prjExplorer.getActiveSelection();
+        if (!selection) {
+            targetStatus.text = 'Keil: 打开工程';
+            targetStatus.tooltip = '打开 Keil 工程';
+            targetStatus.command = 'explorer.open';
+            targetStatus.show();
+            buildStatus.hide();
+            rebuildStatus.hide();
+            downloadStatus.hide();
+            rebuildDownloadStatus.hide();
+            return;
+        }
+        const shorten = (value: string) => value.length > 18 ? value.slice(0, 17) + '…' : value;
+        const targetName = selection.targetName || '无编译目标';
+        targetStatus.text = `Keil: ${shorten(selection.projectName)} / ${shorten(targetName)}`;
+        targetStatus.tooltip = `${selection.projectPath}\n当前目标：${targetName}\n点击切换工程或目标`;
+        targetStatus.command = 'project.selectActiveTarget';
+        targetStatus.show();
+        if (selection.targetName) {
+            buildStatus.show();
+            rebuildStatus.show();
+            downloadStatus.show();
+            rebuildDownloadStatus.show();
+        } else {
+            buildStatus.hide();
+            rebuildStatus.hide();
+            downloadStatus.hide();
+            rebuildDownloadStatus.hide();
+        }
+    };
+    subscriber.push(prjExplorer.onDidChangeTreeData(updateStatusBar));
+    updateStatusBar();
+
     subscriber.push(vscode.commands.registerCommand('explorer.open', async () => {
 
         const uri = await vscode.window.showOpenDialog({
@@ -79,7 +131,34 @@ export function activate(context: vscode.ExtensionContext) {
         }
     }));
 
-    subscriber.push(vscode.commands.registerCommand('project.download', (item: IView) => prjExplorer.getTarget(item)?.download()));
+    subscriber.push(vscode.commands.registerCommand('project.download', (item: IView) => {
+        prjExplorer.getTarget(item)?.download();
+    }));
+    const compileAndDownload = async (item: IView | undefined, rebuild: boolean) => {
+        const target = prjExplorer.getTarget(item);
+        if (!target) { return; }
+        if (!await vscode.workspace.saveAll()) {
+            vscode.window.showWarningMessage(`文件未保存，已取消 Keil ${rebuild ? '重新编译' : '编译'}和下载。`);
+            return;
+        }
+        const projectId = target.prjID;
+        const targetName = target.targetName;
+        const compiled = rebuild ? await target.rebuild() : await target.build();
+        if (!compiled) {
+            vscode.window.showWarningMessage(`Keil ${rebuild ? '重新编译' : '编译'}未成功，已取消下载。请查看编译输出。`);
+            return;
+        }
+        const fresh = prjExplorer.getTargetByIdentity(projectId, targetName);
+        if (!fresh) {
+            vscode.window.showWarningMessage('Keil 工程或目标已关闭，已取消下载。');
+            return;
+        }
+        await fresh.download();
+    };
+    subscriber.push(vscode.commands.registerCommand('project.buildAndDownload',
+        (item?: IView) => compileAndDownload(item, false)));
+    subscriber.push(vscode.commands.registerCommand('project.rebuildAndDownload',
+        (item?: IView) => compileAndDownload(item, true)));
 
     subscriber.push(vscode.commands.registerCommand('item.copyValue', (item?: IView) => {
         if (item?.tooltip === undefined) {
@@ -90,6 +169,7 @@ export function activate(context: vscode.ExtensionContext) {
     }));
 
     subscriber.push(vscode.commands.registerCommand('project.switch', (item?: IView) => prjExplorer.switchTargetByProject(item)));
+    subscriber.push(vscode.commands.registerCommand('project.selectActiveTarget', () => prjExplorer.selectActiveTarget()));
     
     subscriber.push(vscode.commands.registerCommand('project.active', (item?: IView) => prjExplorer.activeProject(item)));
 
@@ -833,7 +913,7 @@ abstract class Target implements IView {
         return added;
     }
 
-    private runTask(name: string, commands: string[], repairPasses: number = 0) {
+    private async runTask(name: string, commands: string[], repairPasses: number = 0): Promise<boolean> {
 
         const resManager = ResourceManager.getInstance();
         const builderPath = resManager.getBuilderExe();
@@ -841,11 +921,11 @@ abstract class Target implements IView {
         const uv4Path = uv4PathIndex >= 0 ? commands[uv4PathIndex + 1] : undefined;
         if (!new File(builderPath).IsFile()) {
             vscode.window.showErrorMessage(`找不到 Keil Assistant 编译工具：${builderPath}`);
-            return;
+            return false;
         }
         if (!uv4Path || !new File(uv4Path).IsFile()) {
             vscode.window.showErrorMessage('找不到 Keil UV4.exe。请在 VS Code 设置中配置 KeilAssistant.MDK.Uv4Path 或 KeilAssistant.C51.Uv4Path。');
-            return;
+            return false;
         }
 
         const args = ['-o', this.uv4LogFile.path].concat(commands);
@@ -855,7 +935,7 @@ abstract class Target implements IView {
         const running = Target.runningTasks.get(taskKey);
         if (running) {
             vscode.window.showWarningMessage(`Keil 工程 ${this.project.uvprjFile.dir} 正在${running}，请等待完成后再${name}。`);
-            return;
+            return false;
         }
         Target.runningTasks.set(taskKey, name);
         const previousLog = this.buildLogStamp();
@@ -865,95 +945,250 @@ abstract class Target implements IView {
             released = true;
             Target.runningTasks.delete(taskKey);
         };
-        const finish = () => {
+        const finish = async (exitCode?: number): Promise<boolean> => {
             this.updateSourceRefs();
             const missing = repairPasses > 0 ? this.missingHeadersAfterBuild(previousLog) : [];
-            if (!missing.length) { release(); return; }
-            this.repairMissingHeaderPaths(missing).then((added) => {
+            // Uv4Caller maps Keil warnings (exit 1) to 0 and errors (exit 2+) to 1.
+            if (!missing.length) { release(); return exitCode === 0; }
+            try {
+                const added = await this.repairMissingHeaderPaths(missing);
                 release();
-                if (!added) { return; }
+                if (!added) { return exitCode === 0; }
                 vscode.window.showInformationMessage(`已为 ${this.targetName} 补充 ${added} 个头文件搜索路径，正在重新编译。`);
                 const fresh = (this.project as KeilProject).getTargetByName(this.targetName);
-                if (fresh && !fresh.closed) { fresh.runTask(name, commands, repairPasses - 1); }
-            }, (error) => {
+                return fresh && !fresh.closed ? fresh.runTask(name, commands, repairPasses - 1) : false;
+            } catch (error) {
                 release();
                 vscode.window.showWarningMessage(`自动修复头文件搜索路径失败：${(<Error>error).message}`);
-            });
+                return false;
+            }
         };
 
         // use task
         if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
             let endSubscription: vscode.Disposable | undefined;
-            try {
-                const workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(this.project.uvprjFile.path));
-                const runId = crypto.randomBytes(8).toString('hex');
-                const task = new vscode.Task({ type: 'keil-task', runId }, workspaceFolder || vscode.TaskScope.Global,
-                    `${name}: ${this.project.uvprjFile.name} / ${this.targetName}`, 'Keil 助手');
-                task.execution = new vscode.ProcessExecution(builderPath, args, { cwd: this.project.uvprjFile.dir });
-                task.isBackground = false;
-                task.problemMatchers = this.getProblemMatcher();
-                task.presentationOptions = {
-                    echo: false,
-                    focus: false,
-                    clear: true
+            let processSubscription: vscode.Disposable | undefined;
+            let endTimer: NodeJS.Timeout | undefined;
+            let settled = false;
+            const disposeListeners = () => {
+                endSubscription?.dispose();
+                processSubscription?.dispose();
+                if (endTimer) { clearTimeout(endTimer); }
+            };
+            const result = new Promise<boolean>((resolve) => {
+                const complete = (exitCode?: number) => {
+                    if (settled) { return; }
+                    settled = true;
+                    disposeListeners();
+                    finish(exitCode).then(resolve, (error) => {
+                        release();
+                        vscode.window.showErrorMessage(`Keil ${name}结束处理失败：${(<Error>error).message}`);
+                        resolve(false);
+                    });
                 };
-                endSubscription = vscode.tasks.onDidEndTask((event) => {
-                    if (event.execution.task.definition.runId !== runId) { return; }
-                    if (endSubscription) { endSubscription.dispose(); }
-                    finish();
-                });
-                vscode.tasks.executeTask(task).then(undefined, (error) => {
-                    if (endSubscription) { endSubscription.dispose(); }
+                const failedToStart = (error: Error) => {
+                    if (settled) { return; }
+                    settled = true;
+                    disposeListeners();
                     release();
                     vscode.window.showErrorMessage(`Keil ${name}启动失败：${error.message}`);
-                });
-            } catch (error) {
-                if (endSubscription) { endSubscription.dispose(); }
-                release();
-                vscode.window.showErrorMessage(`Keil ${name}启动失败：${(<Error>error).message}`);
-            }
+                    resolve(false);
+                };
+                try {
+                    const workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(this.project.uvprjFile.path));
+                    const runId = crypto.randomBytes(8).toString('hex');
+                    const task = new vscode.Task({ type: 'keil-task', runId }, workspaceFolder || vscode.TaskScope.Global,
+                        `${name}: ${this.project.uvprjFile.name} / ${this.targetName}`, 'Keil Assistant');
+                    task.execution = new vscode.ProcessExecution(builderPath, args, { cwd: this.project.uvprjFile.dir });
+                    task.isBackground = false;
+                    task.problemMatchers = this.getProblemMatcher();
+                    task.presentationOptions = {
+                        echo: false,
+                        focus: false,
+                        clear: true
+                    };
+                    processSubscription = vscode.tasks.onDidEndTaskProcess((event) => {
+                        if (event.execution.task.definition.runId === runId) { complete(event.exitCode); }
+                    });
+                    endSubscription = vscode.tasks.onDidEndTask((event) => {
+                        if (event.execution.task.definition.runId !== runId) { return; }
+                        // A process end event normally supplies the exit code. If it does not,
+                        // treat the task as unsuccessful rather than flashing an old image.
+                        endTimer = setTimeout(() => complete(), 250);
+                    });
+                    vscode.tasks.executeTask(task).then(undefined, failedToStart);
+                } catch (error) {
+                    failedToStart(<Error>error);
+                }
+            });
+            return result;
 
         } else {
             // VS Code cannot report completion of a command in an
             // interactive terminal, so use a process with a real exit event.
-            try {
-                const output = Target.processOutput ||
-                    (Target.processOutput = vscode.window.createOutputChannel('Keil 助手'));
-                output.appendLine(`${name}: ${this.project.uvprjFile.name} / ${this.targetName}`);
-                output.show(true);
-                const processHandle = child_process.spawn(builderPath, args, {
-                    cwd: this.project.uvprjFile.dir,
-                    windowsHide: true
-                });
-                processHandle.stdout?.on('data', (chunk) => output.append(chunk.toString()));
-                processHandle.stderr?.on('data', (chunk) => output.append(chunk.toString()));
-                processHandle.on('error', (error) => {
-                    release();
-                    output.appendLine(`Keil ${name}启动失败：${error.message}`);
-                    vscode.window.showErrorMessage(`Keil ${name}启动失败：${error.message}`);
-                });
-                processHandle.on('close', (code, signal) => {
-                    output.appendLine(`Keil ${name}已结束，退出码 ${code === null ? '未知' : code}${signal ? `（信号 ${signal}）` : ''}。`);
-                    finish();
-                });
-            } catch (error) {
-                release();
-                Target.processOutput?.appendLine(`Keil ${name}启动失败：${(<Error>error).message}`);
-                vscode.window.showErrorMessage(`Keil ${name}启动失败：${(<Error>error).message}`);
-            }
+            return new Promise<boolean>((resolve) => {
+                let settled = false;
+                const complete = (code?: number) => {
+                    if (settled) { return; }
+                    settled = true;
+                    finish(code).then(resolve, (error) => {
+                        release();
+                        vscode.window.showErrorMessage(`Keil ${name}结束处理失败：${(<Error>error).message}`);
+                        resolve(false);
+                    });
+                };
+                try {
+                    const output = Target.processOutput ||
+                        (Target.processOutput = vscode.window.createOutputChannel('Keil Assistant'));
+                    output.appendLine(`${name}: ${this.project.uvprjFile.name} / ${this.targetName}`);
+                    output.show(true);
+                    const processHandle = child_process.spawn(builderPath, args, {
+                        cwd: this.project.uvprjFile.dir,
+                        windowsHide: true
+                    });
+                    processHandle.stdout?.on('data', (chunk) => output.append(chunk.toString()));
+                    processHandle.stderr?.on('data', (chunk) => output.append(chunk.toString()));
+                    processHandle.on('error', (error) => {
+                        output.appendLine(`Keil ${name}启动失败：${error.message}`);
+                        vscode.window.showErrorMessage(`Keil ${name}启动失败：${error.message}`);
+                        complete();
+                    });
+                    processHandle.on('close', (code, signal) => {
+                        output.appendLine(`Keil ${name}已结束，退出码 ${code === null ? '未知' : code}${signal ? `（信号 ${signal}）` : ''}。`);
+                        complete(code === null ? undefined : code);
+                    });
+                } catch (error) {
+                    Target.processOutput?.appendLine(`Keil ${name}启动失败：${(<Error>error).message}`);
+                    vscode.window.showErrorMessage(`Keil ${name}启动失败：${(<Error>error).message}`);
+                    complete();
+                }
+            });
         }
     }
 
+    private async runBuildWithProgress(name: string, commands: string[]): Promise<boolean> {
+        return vscode.window.withProgress({
+            location: vscode.ProgressLocation.Window,
+            title: `Keil ${name}：${this.targetName}`,
+            cancellable: false
+        }, async (progress) => {
+            const startedAt = Date.now();
+            let percent = 0;
+            const report = (value: number, state: string) => {
+                const filled = Math.round(value / 10);
+                const bar = '▰'.repeat(filled) + '▱'.repeat(10 - filled);
+                progress.report({ message: `${bar} ${name}进度 ${value}%：${state}` });
+            };
+            report(0, `正在${name}`);
+            const timer = setInterval(() => {
+                // Ease toward 95%; only a successful Keil exit may show 100%.
+                const next = Math.min(95, Math.floor(95 * (1 - Math.exp(-(Date.now() - startedAt) / 15000))));
+                if (next > percent) {
+                    percent = next;
+                    report(percent, `正在${name}`);
+                }
+            }, 300);
+            try {
+                const successful = await this.runTask(name, commands, 3);
+                report(successful ? 100 : percent, successful ? `${name}完成` : `${name}失败`);
+                vscode.window.setStatusBarMessage(
+                    successful ? `$(check) Keil ${name}完成（100%）` :
+                    `$(error) Keil ${name}失败（进度 ${percent}%），请查看任务输出`, 5000);
+                return successful;
+            } finally {
+                clearInterval(timer);
+            }
+        });
+    }
+
     build() {
-        this.runTask('编译', this.getBuildCommand(), 3);
+        return this.runBuildWithProgress('编译', this.getBuildCommand());
     }
 
     rebuild() {
-        this.runTask('重新编译', this.getRebuildCommand(), 3);
+        return this.runBuildWithProgress('重新编译', this.getRebuildCommand());
     }
 
-    download() {
-        this.runTask('下载到设备', this.getDownloadCommand());
+    async download(): Promise<boolean> {
+        let finalStagePercent = 0;
+        const stageBar = (percent: number) => {
+            const filled = Math.round(percent / 10);
+            return '▰'.repeat(filled) + '▱'.repeat(10 - filled);
+        };
+        const successful = await vscode.window.withProgress({
+            location: vscode.ProgressLocation.Window,
+            title: `Keil 下载：${this.targetName}`,
+            cancellable: false
+        }, async (progress) => {
+            progress.report({ increment: 0, message: `${stageBar(0)} 阶段 0%：正在通过 Keil 下载到设备` });
+            const startedAt = Date.now();
+            const previousLog = this.buildLogStamp();
+            let lastStage = '';
+            let failedInLog = false;
+            const updateStage = () => {
+                const stamp = this.buildLogStamp();
+                if (!stamp || (previousLog && stamp.mtimeMs === previousLog.mtimeMs &&
+                    stamp.size === previousLog.size)) { return; }
+                try {
+                    const descriptor = fs.openSync(this.uv4LogFile.path, 'r');
+                    let log = '';
+                    try {
+                        const length = Math.min(stamp.size, 64 * 1024);
+                        const bytes = Buffer.alloc(length);
+                        fs.readSync(descriptor, bytes, 0, length, stamp.size - length);
+                        log = bytes.toString('utf8');
+                    } finally { fs.closeSync(descriptor); }
+                    if (/Flash Download failed|(?:^|\n)\s*Error:/i.test(log)) {
+                        failedInLog = true;
+                        if (lastStage !== 'failed') {
+                            lastStage = 'failed';
+                            progress.report({ increment: 0,
+                                message: `${stageBar(finalStagePercent)} 阶段 ${finalStagePercent}%：Keil 报告下载失败` });
+                        }
+                        return;
+                    }
+                    const stage = /Verify\s+(?:OK|Done)/i.test(log) ? { percent: 100, message: '校验完成' } :
+                        /Programming\s+Done/i.test(log) ? { percent: 67, message: '写入完成，正在校验' } :
+                        /Erase\s+Done/i.test(log) ? { percent: 33, message: '擦除完成，正在写入' } :
+                        /Load\s+["']|Flash\s+Load/i.test(log) ? { percent: 0, message: '正在准备下载' } : undefined;
+                    if (stage && stage.message !== lastStage && stage.percent >= finalStagePercent) {
+                        lastStage = stage.message;
+                        progress.report({ increment: stage.percent - finalStagePercent,
+                            message: `${stageBar(stage.percent)} 阶段 ${stage.percent}%：${stage.message}` });
+                        finalStagePercent = stage.percent;
+                    }
+                } catch (error) { /* The Keil log can be replaced while it is being written. */ }
+            };
+            const timer = setInterval(updateStage, 250);
+            try {
+                const taskSuccessful = await this.runTask('下载到设备', this.getDownloadCommand());
+                updateStage();
+                const successful = taskSuccessful && !failedInLog;
+                if (successful) {
+                    progress.report({ increment: 100 - finalStagePercent,
+                        message: `${stageBar(100)} 阶段 100%：下载命令已完成` });
+                    finalStagePercent = 100;
+                } else {
+                    progress.report({ increment: 0,
+                        message: `${stageBar(finalStagePercent)} 阶段 ${finalStagePercent}%：下载失败，请查看任务输出` });
+                }
+                const remaining = Math.max(0, 1200 - (Date.now() - startedAt));
+                if (remaining) {
+                    await new Promise<void>((resolve) => setTimeout(resolve, remaining));
+                }
+                return successful;
+            } finally {
+                clearInterval(timer);
+            }
+        });
+        vscode.window.setStatusBarMessage(successful ? '$(check) Keil 下载阶段 100%：已完成' :
+            `$(error) Keil 下载失败（阶段 ${finalStagePercent}%）`, 5000);
+        if (successful) {
+            vscode.window.showInformationMessage('Keil 下载命令已完成，请查看输出中的烧录校验结果。');
+        } else {
+            vscode.window.showErrorMessage('Keil 下载未完成，请查看任务输出和烧录日志。');
+        }
+        return successful;
     }
 
     hasLoadedSourceRefs(): boolean {
@@ -1917,8 +2152,38 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
             });
             if (targetName) {
                 prj.setActiveTarget(targetName);
+                this.setCurrentProject(prj);
             }
         }
+    }
+
+    private setCurrentProject(project: KeilProject) {
+        if (this.currentActiveProject !== project) {
+            this.currentActiveProject?.deactive();
+            this.currentActiveProject = project;
+            project.active();
+        }
+        this.updateView();
+    }
+
+    async selectActiveTarget() {
+        const choices = Array.from(this.prjList.values()).reduce<Array<{
+            label: string; description: string; detail: string; project: KeilProject; target: Target;
+        }>>((items, project) => items.concat(project.getTargets().map((target) => ({
+            label: target.targetName,
+            description: project.label,
+            detail: project.uvprjFile.path,
+            project,
+            target
+        }))), []);
+        if (!choices.length) {
+            vscode.window.showWarningMessage('请先打开包含编译目标的 Keil 工程。');
+            return;
+        }
+        const selected = await vscode.window.showQuickPick(choices, { placeHolder: '选择当前 Keil 工程和编译目标' });
+        if (!selected) { return; }
+        selected.project.setActiveTarget(selected.target.targetName);
+        this.setCurrentProject(selected.project);
     }
 
     async createGroup(view?: IView) {
@@ -2273,6 +2538,20 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
                 vscode.window.showWarningMessage('请先打开 Keil 工程。');
             }
         }
+    }
+
+    getActiveSelection(): { projectName: string; projectPath: string; targetName?: string } | undefined {
+        const project = this.currentActiveProject;
+        const target = project?.getActiveTarget();
+        return project ? {
+            projectName: project.label,
+            projectPath: project.uvprjFile.path,
+            targetName: target?.targetName
+        } : undefined;
+    }
+
+    getTargetByIdentity(projectId: string, targetName: string): Target | undefined {
+        return this.prjList.get(projectId)?.getTargetByName(targetName);
     }
 
     updateView() {

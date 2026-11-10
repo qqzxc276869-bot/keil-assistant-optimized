@@ -1,4 +1,4 @@
-# Keil Assistant (Optimized)
+# Keil Assistant (优化版)
 
 此仓库由 [Goal / qqzxc276869-bot](https://github.com/qqzxc276869-bot) 维护，基于 [原版 Keil Assistant](https://github.com/github0null/keil-assistant) 开发，改进了深层 Keil 工程的发现、VS Code 编译和工程文件管理。原版由 cl 开发，以 [MIT 许可证](./LICENSE)发布；本仓库保留原版权声明和许可证。此优化版与原作者发布的 VS Code Marketplace 版本不同。
 
@@ -9,17 +9,17 @@
 | 方面 | 优化版的改动 |
 | --- | --- |
 | 工程发现 | 递归查找工作区内深层 `.uvproj` / `.uvprojx`；多工程可按路径选择，手动选择会被记住；加载时保留外层源码工作区。 |
-| 编译体验 | 编译和重新编译前保存 VS Code 文件，从工程目录调用 `UV4.exe`，检查工具路径；同一工程的编译、重新编译和下载不会重叠运行。 |
+| 编译体验 | 状态栏显示当前工程与目标，提供编译、重新编译、编译并下载、重新编译并下载入口；编译前保存文件，下载前确认编译成功；同一工程的任务不会重叠运行。 |
 | 工程管理 | 在 VS Code 中新建 Keil 分组、一次添加多个已有的 C/C++、汇编、头文件或库文件、移除工程引用而保留磁盘文件；新建文件可按目录加入工程，添加头文件时同步配置该 Target 的头文件目录。 |
 | 编辑器配置 | 将 C/C++ IntelliSense 配置写入工程所属的 VS Code 工作区，保留已有 JSONC 注释和用户配置。 |
 
 编译和下载仍使用本机安装的 Keil；新建分组和增删工程文件引用可直接在 VS Code 完成。
 
-## 安装此修改版
+## 本地安装
 
-从本仓库的 [Releases](https://github.com/qqzxc276869-bot/keil-assistant-optimized/releases) 下载 `.vsix`，在 VS Code 中运行 **Extensions: Install from VSIX...** 选择它。需要 VS Code 1.41 或更新版本。已发布的旧版安装包保留在各自的 Release 中，可按需下载。此版的扩展标识为 `qqzxc276869-bot.keil-assistant-optimized`；如果已安装原版 `cl.keil-assistant`，建议先停用原版，避免两个扩展同时响应快捷键和工程视图。
+安装 Node.js 和 Python，在仓库目录运行 `npm ci`、`npm test`，然后运行 `python scripts/package_vsix.py`。脚本完成检查和编译后，只在仓库目录生成一份 `keil-assistant-<版本号>.vsix`，供本地安装；不再制作 Marketplace 专用包。已有的旧版安装包不会因新版本打包而删除。
 
-从源码构建：安装 Node.js 和 Python，运行 `npm ci`、`npm run check`、`npm test`，然后运行 `python scripts/package_vsix.py` 生成 VSIX。
+在 VS Code 中运行 **扩展: 从 VSIX 安装...**，选择生成的文件。需要 VS Code 1.41 或更新版本。此版的扩展标识为 `qqzxc276869-bot.keil-assistant-optimized`；如果已安装原版 `cl.keil-assistant`，建议先停用原版，避免两个扩展同时响应快捷键和工程视图。
 
 ## [English](./README_EN.md)
 
@@ -40,7 +40,9 @@ Keil Assistant 在 VS Code 中显示 Keil C51/ARM 工程，并通过 Keil uVisio
 
 ## 常用操作
 
-- **编译、重新编译、下载**：项目视图提供对应按钮；`F7` 编译当前活动目标，`Ctrl+Alt+F7` 重新编译。编译前会保存 VS Code 中未保存的文件；同一工程的任务执行期间，重复操作会给出提示。实际编译结果以 Keil 构建输出为准。
+- **快捷操作**：点击状态栏中的工程与目标名称，可在已打开的 Keil 工程及其 Target 之间切换。状态栏提供编译、重新编译、编译并下载、重新编译并下载按钮；两个下载命令也显示在 Keil 工程视图顶部和目标行右侧。未打开工程时，状态栏提供打开入口。
+
+- **编译、重新编译、下载**：项目视图仍提供原有按钮；`F7` 编译当前活动目标，`Ctrl+Alt+F7` 重新编译，`Ctrl+Alt+D` 直接下载。**编译并下载到设备** 和 **重新编译并下载到设备** 会先保存文件，等待对应编译及头文件路径修复后的重试成功，再执行 Keil `-f` 下载命令；编译失败、取消或缺少退出结果时停止下载。编译时，窗口底部状态栏显示逐步增长的百分比，最高到 95%；编译成功才显示 100%，失败则停在当时的数值。编译百分比根据运行时间估算，不代表已编译文件比例。三种下载方式也在底部状态栏显示进度条和阶段百分比：开始 0%、擦除完成 33%、写入完成 67%、校验完成 100%。这是**阶段进度**，不是写入字节的百分比；下载失败时不会补到 100%。快速完成或失败的提示会短暂保留，状态栏还会显示五秒钟的结果。下载完成后仍需查看 Keil 原始输出中的烧录与校验信息，插件无法单独确认开发板是否正常运行。
 
   ![build](./res/preview/build.png)
 

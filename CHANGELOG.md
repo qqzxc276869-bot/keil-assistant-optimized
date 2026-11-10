@@ -1,163 +1,238 @@
-# Change Log
+# 更新日志
 
-All notable changes to the "keil-assistant" extension will be documented in this file.
+记录 Keil Assistant 各版本的重要变化。
 
-## [v1.7.12] Repair missing Keil header paths
-- Parse actual Keil missing-header build errors, find the header in the current project's source tree, and add the matching directory to that target's `IncludePath`
-- Retry the build automatically after repairing paths, with a three-retry limit
-- Ask the user when header names are duplicated or the match is only in the wider workspace; report files that are absent
-- Cover ARMCC, GCC, and C51 diagnostic forms and verify unique, ambiguous, and missing-header build flows
-
-***
-
-## [v1.7.11] Chinese interface text
-- Translate Keil command titles, context menus, settings, and project view labels into Chinese, including **从 Keil 工程移除文件引用** and **清除自动添加的文件夹分组记录**
-- Translate runtime notifications, file and group selection prompts, project-editing and C/C++ configuration errors, and A51 completion descriptions
-- Place the folder-mapping reset command in the Keil project view's `…` menu as well as the Command Palette
-- Update the Chinese and English instructions to use the displayed command names
-- Preserve the earlier VSIX packages and GitHub releases
+## [v1.7.21] 编译进度百分比
+- 编译和重新编译时，底部状态栏显示逐步增长的百分比，最高停在 95%
+- 只有编译成功才显示 100%；失败时保留当前百分比并提示查看任务输出
+- 编译百分比根据运行时间估算；仅生成一份本地 VSIX，旧包保留
 
 ***
 
-## [v1.7.10] Automatically add new VS Code files
-- Add supported files created in the VS Code Explorer to a loaded Keil project after their first save
-- Suggest a destination from files in the same directory, confirm it the first time for each directory, and remember that mapping
-- Add **Forget Auto Add Folder Mapping** (`project.forgetAutoAddFolder`) to clear a remembered directory mapping from the Command Palette
-- Allow automatic addition to be turned off with `KeilAssistant.Project.AutoAddNewFiles`; direct disk writes from a terminal or external tool do not trigger it, while other extensions using VS Code's edit API may
-- Require VS Code 1.41 or later for the file creation event
-- Keep earlier VSIX packages available in their existing GitHub Releases
+## [v1.7.20] 底部状态栏进度与单一安装包
+- 编译和重新编译时在窗口底部显示动态进度提示；Keil 未提供可靠百分比，界面明确标注进度未知
+- 下载进度改在底部状态栏显示，使用进度条与 0%、33%、67%、100% 阶段百分比；结束后短暂显示结果
+- 后续仅生成 `keil-assistant-<版本号>.vsix` 这一种本地安装包，不再制作 Marketplace 专用包；旧安装包保留
 
 ***
 
-## [v1.7.9] Add multiple Keil project files
-- Add saved assembly (`.s` / `.S`, `.asm`, `.a51`, `.a66`), C++, library, and header/include files to a Keil group alongside `.c` and `.h`
-- Allow selecting several files in one file dialog or from a multi-selection in the VS Code Explorer
-- Write added file references in one project update and report files that are already present in another group
+## [v1.7.19] 下载阶段百分比与失败提示
+- 在通知进度条中显示 0%、33%、67%、100% 的阶段完成比例，分别对应开始、擦除完成、写入完成、校验完成；明确区别于写入字节百分比
+- 下载成功或失败后都短暂保留通知区域的进度提示，避免快速失败时看不到
+- 识别 Keil 日志中的下载失败，即使调用程序返回成功也不会误报 100%
+- 下载期间同步在状态栏显示阶段百分比；结束后保留五秒钟的中文结果
+- 保留 1.7.18 及更早版本的安装包
 
 ***
 
-## [v1.7.8] Project editing and build workflow
-- Add a header's directory to the selected Target's Keil IncludePath when adding an existing `.h` file from VS Code or the Keil project tree
-- Let project, group, and file commands invoked from the Command Palette prompt for the missing selection instead of failing or silently doing nothing
-- Prevent overlapping build, rebuild, and download tasks that share a project build log; report completion when no workspace is open
-- Preserve comments, trailing commas, BOM, and unrelated settings in `c_cpp_properties.json`; write configurations once per project load and skip unchanged files
-- Use one build-log watcher per project and cache unchanged dependency files; obtain ARMClang macros without blocking the extension host, with a timeout and retry after failure
-- Require VS Code 1.40 or later, show `.C`/`.H` Explorer actions, and rebuild with runtime dependencies and source maps before packaging the VSIX
+## [v1.7.18] 提亮下载按钮图标
+- 两个下载快捷按钮改用白色描边，与原有 Keil 工程图标的视觉风格保持一致
+- 为浅色主题提供深色描边版本，避免白色线条在浅色背景上看不清
+- 保留 1.7.17 及更早版本的安装包
 
 ***
 
-## [v1.7.7] Reliability and packaging review
-- Preserve the loaded project tree when a Keil project save is temporarily incomplete, and continue watching after atomic file replacement
-- Fix UNC source paths, the build directory when no VS Code workspace is open, and IntelliSense configuration collisions between projects with the same target name
-- Load targets with omitted optional group, include-path, or macro fields
-- Preserve XML attributes when expanding empty self-closing groups or file lists
-- Include the linked MIT license in the VSIX, clean stale compiled files before packaging, and remove unused development dependencies
+## [v1.7.17] 显示下载入口和进度
+- 将“编译并下载到设备”“重新编译并下载到设备”显示在 Keil 工程视图顶部及目标行的快捷按钮中
+- 为两个命令加入独立图标，方便识别；状态栏和命令面板入口继续保留
+- 对快速完成的下载短暂保留“下载命令已完成”进度提示，避免通知来不及显示
+- 保留 1.7.16 及更早版本的安装包
 
 ***
 
-## [v1.7.6] Packaging and activation cleanup
-- Replace deprecated `activationEvents: ["*"]` with targeted activation events (project view, A51 language, uVision files in the workspace, and all user commands for VS Code 1.38 compatibility)
-- Remove `@types/vscode` from runtime dependencies
-- Remove the unused webpack configuration and its dev dependencies
-- Update VS Code development tasks to use the current build script
+## [v1.7.16] 重新编译并下载、中文下载进度
+- 新增“重新编译并下载到设备”命令，可从状态栏、命令面板和 Keil 目标菜单使用
+- 重新编译成功后才启动下载；重新编译失败或文件未保存时停止下载
+- 直接下载、编译并下载、重新编译并下载时显示 VS Code 动态进度条，并根据 Keil 日志用中文提示擦除、写入和校验阶段
+- Keil 日志没有可靠的百分比，因此进度条不显示虚构的百分比
+- 将全部历史更新日志改为中文，并保留旧版 VSIX 安装包
 
 ***
 
-## [v1.7.5] Update XML parser dependency
-- Upgrade `xml2js` to 0.6.2 to address GHSA-776f-qx25-q3cc in the original dependency
-- Keep the v1.7.4 project-management and build improvements
+## [v1.7.15] 状态栏和编译后下载
+- 在 VS Code 状态栏显示当前 Keil 工程与目标，可通过同一选择框切换
+- 新增编译、重新编译、编译并下载快捷按钮；保留工程树中的直接下载命令和快捷键
+- 等待编译任务退出结果和头文件路径自动修复后的重试结果；失败或无法确认结果时停止下载
+- 保留旧版 VSIX 安装包
 
 ***
 
-## [v1.7.4] Manage groups and file references in VS Code
-- Create a Keil group from the project or target tree item
-- Add a saved `.c` or `.h` directly to a Keil group
-- Remove a file reference from a Keil group without deleting the disk file
+## [v1.7.14] 显示名称调整
+- 在 VS Code 和扩展市场中显示为 **Keil Assistant (优化版)**
+- 设置分组、任务来源和输出通道使用 **Keil Assistant** 名称
 
 ***
 
-## [v1.7.3] Add saved C files and headers from VS Code
-- Add a `.c` or `.h` file to a selected Keil project, target, and group from the VS Code Explorer or command palette
-- Update only the selected XML group, reject duplicate references, and support empty groups
+## [v1.7.13] 原创扩展图标
+- 用文件夹和电路走线图案替换原先的芯片形状及 KEIL 字样
+- 生成新的扩展市场安装包，并保留早期 VSIX
 
 ***
 
-## [v1.7.2] Local optimized build
-- Discover nested Keil projects without switching away from the outer VS Code workspace
-- Keep manually selected projects and place IntelliSense settings in the workspace folder
-- Save edited files before build and rebuild; run tasks from the Keil project directory
-- Validate UV4.exe paths and avoid building a closed project with F7
+## [v1.7.12] 自动修复头文件搜索路径
+- 解析 Keil 的头文件缺失编译错误，在当前工程源码树中查找文件，并把对应目录加入目标的 `IncludePath`
+- 路径修复后自动重试编译，最多重试三次
+- 遇到多个同名头文件或只在工作区其他位置找到文件时请用户选择；找不到时给出提示
+- 覆盖 ARMCC、GCC 和 C51 的错误格式，并验证唯一匹配、多处匹配和缺失文件的流程
+
+***
+
+## [v1.7.11] 界面文字中文化
+- 将 Keil 命令、右键菜单、设置和工程视图文字改为中文，包括“从 Keil 工程移除文件引用”和“清除自动添加的文件夹分组记录”
+- 将运行提示、文件与分组选择提示、工程编辑及 C/C++ 配置错误、A51 补全说明改为中文
+- 在 Keil 工程视图的 `…` 菜单和命令面板中提供清除文件夹分组记录命令
+- 更新中英文使用说明中的命令名称，并保留早期安装包及 GitHub Release
+
+***
+
+## [v1.7.10] 新建文件自动加入工程
+- 在 VS Code 资源管理器中新建受支持文件并首次保存后，将其加入已加载的 Keil 工程
+- 根据同目录已有文件建议归属，首次确认后记住文件夹与分组的对应关系
+- 增加清除自动添加文件夹分组记录的命令 `project.forgetAutoAddFolder`
+- 可通过 `KeilAssistant.Project.AutoAddNewFiles` 关闭自动添加；终端或外部工具直接写入磁盘的文件不会触发，其他扩展通过 VS Code 文件 API 创建的文件可能触发
+- 文件创建事件要求 VS Code 1.41 或更新版本；早期 VSIX 仍保留在各自的 GitHub Release
+
+***
+
+## [v1.7.9] 批量添加工程文件
+- 除 `.c` 和 `.h` 外，支持把汇编、C++、库文件和其他头文件加入 Keil 分组
+- 支持在文件选择框或 VS Code 资源管理器中一次选择多个文件
+- 一次更新工程文件，遇到已有引用时报告其所在分组
+
+***
+
+## [v1.7.8] 工程编辑和编译流程
+- 添加已有 `.h` 文件时，把所在目录加入所选目标的 Keil 头文件搜索路径
+- 从命令面板调用工程、分组和文件命令时，提示补选缺少的对象
+- 阻止共享同一工程日志的编译、重新编译和下载任务重叠；没有打开 VS Code 工作区时也能报告任务结束
+- 更新 `c_cpp_properties.json` 时保留注释、尾随逗号、BOM 和其他配置；配置未变化时跳过写入
+- 每个工程只使用一个编译日志监听器，缓存未变化的依赖文件；获取 ARMClang 宏时设置超时并允许失败后重试
+- 要求 VS Code 1.40 或更新版本，显示 `.C` / `.H` 文件操作，并在打包前重新构建依赖和源码映射
+
+***
+
+## [v1.7.7] 稳定性和打包检查
+- Keil 工程保存期间文件暂时不完整时保留已加载的工程树，并在原子替换后继续监听
+- 修复 UNC 源码路径、没有 VS Code 工作区时的编译目录，以及同名目标在不同工程中的 IntelliSense 配置冲突
+- 支持加载省略可选分组、头文件路径或宏字段的目标
+- 扩展空 XML 分组或文件列表时保留原有属性
+- 在 VSIX 中包含 MIT 许可证，打包前清理旧构建文件，并移除未使用的开发依赖
+
+***
+
+## [v1.7.6] 打包与激活配置
+- 用按工程视图、A51 语言、工作区 uVision 文件和用户命令触发的激活事件替换已弃用的全局激活方式
+- 将 `@types/vscode` 从运行依赖中移除
+- 删除未使用的 webpack 配置及其开发依赖
+- 更新 VS Code 开发任务，使其使用当前构建脚本
+
+***
+
+## [v1.7.5] 更新 XML 解析依赖
+- 将 `xml2js` 更新至 0.6.2，修复原依赖中的 GHSA-776f-qx25-q3cc 问题
+- 保留 v1.7.4 的工程管理和编译改进
+
+***
+
+## [v1.7.4] 在 VS Code 中管理分组和文件引用
+- 从工程或目标树条目创建 Keil 分组
+- 直接把已保存的 `.c` 或 `.h` 文件加入 Keil 分组
+- 从 Keil 分组移除文件引用，同时保留磁盘上的文件
+
+***
+
+## [v1.7.3] 从 VS Code 添加 C 文件和头文件
+- 从 VS Code 资源管理器或命令面板将 `.c` / `.h` 加入指定工程、目标和分组
+- 只修改选中的 XML 分组，拒绝重复引用，并支持空分组
+
+***
+
+## [v1.7.2] 本地优化版
+- 发现深层 Keil 工程，同时保留外层 VS Code 源码工作区
+- 记住手动选择的工程，把 IntelliSense 配置写入工作区文件夹
+- 编译和重新编译前保存修改的文件，并从 Keil 工程目录运行任务
+- 检查 `UV4.exe` 路径，避免工程关闭后仍通过 F7 编译
 
 ***
 
 ## [v1.7.1]
-- Fixed: can't use shortcut key
+- 修复快捷键无法使用的问题
+
 ***
 
 ## [v1.7.0]
-- Change: adjust view
-- Optimize: Update doc
-- Optimize: support double click to open file with non-preview mode
+- 调整工程视图并更新文档
+- 支持双击文件，以非预览模式打开
+
 ***
 
 ## [v1.6.2]
-- Fixed: output messy code
-- Optimize: extend more armcc keywords
+- 修复输出乱码
+- 扩充 ARMCC 关键字
+
 ***
 
 ## [v1.6.1]
-- Fixed: error rebuild command
+- 修复重新编译命令错误
+
 ***
 
 ## [v1.6.0]
-- New: support show source referance files
-- New: add exclude list on open multi-project workspace
+- 支持显示源文件引用
+- 在打开多工程工作区时加入排除列表
+
 ***
 
 ## [v1.5.0]
-- New: add 'Active Target' button
-- Changed: adjust keybindings
+- 新增“激活目标”按钮
+- 调整快捷键
+
 ***
 
 ## [v1.4.0]
-- New: support multi-target keil project
-- New: add armclang cpp macros
+- 支持含多个目标的 Keil 工程
+- 增加 ARMClang C/C++ 宏
+
 ***
 
 ## [v1.3.3]
-- Optimize: extend more armcc keywords
+- 扩充 ARMCC 关键字
+
 ***
 
 ## [v1.3.2]
-- Fixed: some incorrect C51 keywords
-- Fixed: some other bugs
+- 修正部分 C51 关键字和其他问题
+
 ***
 
 ## [v1.3.1]
-- Fixed: add missed system include path
-- Changed: remove c51 language highlight
-- Optimized: add more system macro
+- 补充遗漏的系统头文件路径
+- 移除 C51 语言高亮，并增加系统宏
+
 ***
 
 ## [v1.3.0]
-- Add: switch workspace after open project
-- Changed: change icon
-- Fixed: build failed without workspace
+- 打开工程后切换工作区
+- 更换图标
+- 修复没有工作区时编译失败的问题
+
 ***
 
 ## [v1.2.1]
-- Add: Add some internal defines for ARM/C51
+- 增加 ARM/C51 内部宏定义
+
 ***
 
 ## [v1.2.0]
-- Fixed: Can't run task by CMD
-- Add: Shortcut keys
+- 修复通过 CMD 无法运行任务的问题
+- 增加快捷键
+
 ***
 
 ## [v1.1.0]
-- Fixed: Not found C51/STM32 system include dir
-- Fixed: Invalid macro
+- 修复找不到 C51/STM32 系统头文件目录和无效宏的问题
+
 ***
 
 ## [v1.0.0]
-- First release
+- 首次发布
