@@ -387,6 +387,37 @@ export async function createGroupInKeilProject(projectPath: string, targetName: 
     return { status: 'created' };
 }
 
+/** Remove a virtual group and its project references, leaving disk files untouched. */
+export async function removeGroupFromKeilProject(projectPath: string, targetName: string,
+    groupName: string): Promise<ProjectEditResult> {
+    const { buffer, xml } = readUtf8Project(projectPath);
+    const parser = new xml2js.Parser({ explicitArray: false });
+    const document = await parser.parseStringPromise(xml);
+    const targets = asArray<any>(document.Project && document.Project.Targets && document.Project.Targets.Target);
+    const targetIndex = targets.findIndex((target) => target.TargetName === targetName);
+    if (targetIndex < 0) { throw new Error(`找不到 Keil 编译目标：${targetName}`); }
+    const groups = asArray<any>(targets[targetIndex].Groups && targets[targetIndex].Groups.Group);
+    const matches = groups.map((group, index) => group.GroupName === groupName ? index : -1)
+        .filter((index) => index >= 0);
+    if (!matches.length) { return { status: 'not-present' }; }
+    if (matches.length !== 1) { throw new Error(`Keil 分组名称不唯一：${groupName}`); }
+    const target = targetElement(xml, targets.length, targetIndex);
+    const groupElements = direct(one(target, 'Groups'), 'Group');
+    if (groupElements.length !== groups.length) { throw new Error('无法安全地匹配 Keil 分组结构。'); }
+    const range = elementRemovalRange(xml, groupElements[matches[0]]);
+    const updated = xml.slice(0, range.start) + xml.slice(range.end);
+    const after = await parser.parseStringPromise(updated);
+    const afterTargets = asArray<any>(after.Project.Targets.Target);
+    const afterGroupContainer = afterTargets[targetIndex].Groups;
+    const afterGroups = asArray<any>(afterGroupContainer && typeof afterGroupContainer === 'object' ?
+        afterGroupContainer.Group : undefined);
+    if (afterGroups.length !== groups.length - 1 || afterGroups.some((group) => group.GroupName === groupName)) {
+        throw new Error('无法验证已删除的 Keil 分组，工程未保存。');
+    }
+    writeProjectChange(projectPath, buffer, updated);
+    return { status: 'removed' };
+}
+
 /** Remove one reference from a Keil group; the source file on disk is kept. */
 export async function removeFileFromKeilProject(projectPath: string, targetName: string,
     groupName: string, sourcePath: string): Promise<ProjectEditResult> {

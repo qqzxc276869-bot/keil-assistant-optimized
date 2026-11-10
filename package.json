@@ -2,7 +2,7 @@
     "name": "keil-assistant-optimized",
     "displayName": "Keil Assistant (优化版)",
     "description": "在 VS Code 中管理和编译 Keil uVision 工程",
-    "version": "1.7.21",
+    "version": "1.7.22",
     "publisher": "qqzxc276869-bot",
     "author": {
         "name": "Goal",
@@ -34,7 +34,9 @@
         "onCommand:explorer.open",
         "onCommand:explorer.discover",
         "onCommand:project.addFile",
+        "onCommand:project.syncFolder",
         "onCommand:project.createGroup",
+        "onCommand:project.removeGroup",
         "onCommand:project.addFileToGroup",
         "onCommand:project.removeFile",
         "onCommand:project.forgetAutoAddFolder",
@@ -90,7 +92,7 @@
                     "KeilAssistant.Project.AutoAddNewFiles": {
                         "type": "boolean",
                         "scope": "resource",
-                        "markdownDescription": "在 VS Code 中新建受支持的文件并首次保存后，自动将其加入 Keil 工程。文件夹对应多个分组时，选择一次后会记住。",
+                        "markdownDescription": "自动将 VS Code 中新建并首次保存、或从文件资源管理器复制到工作区的 .c 文件加入 Keil 分组；头文件不加入分组。文件夹对应多个分组时，选择一次后会记住。",
                         "default": true
                     }
                 }
@@ -118,8 +120,16 @@
                 "title": "将文件添加到 Keil 工程"
             },
             {
+                "command": "project.syncFolder",
+                "title": "扫描文件夹并补入 Keil 工程"
+            },
+            {
                 "command": "project.createGroup",
                 "title": "新建 Keil 分组"
+            },
+            {
+                "command": "project.removeGroup",
+                "title": "删除 Keil 分组（保留磁盘文件）"
             },
             {
                 "command": "project.addFileToGroup",
@@ -218,6 +228,11 @@
                     "command": "project.addFile",
                     "when": "resourceExtname =~ /\\.(c|s|asm|a51|a66|lib|h|hpp|hxx|hh|inc|cpp|cc|cxx|c\\+\\+)$/i",
                     "group": "navigation@10"
+                },
+                {
+                    "command": "project.syncFolder",
+                    "when": "resourceScheme == file",
+                    "group": "navigation@11"
                 }
             ],
             "editor/context": [
@@ -261,6 +276,10 @@
                 },
                 {
                     "command": "project.addFileToGroup",
+                    "when": "viewItem == FileGroup"
+                },
+                {
+                    "command": "project.removeGroup",
                     "when": "viewItem == FileGroup"
                 },
                 {

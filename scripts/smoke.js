@@ -43,6 +43,7 @@ const taskProcessEndListeners = new Set();
 const statusItems = [];
 const progressRuns = [];
 const createFileListeners = new Set();
+const externalCreateListeners = new Set();
 const saveDocumentListeners = new Set();
 const renameFileListeners = new Set();
 const deleteFileListeners = new Set();
@@ -92,6 +93,13 @@ const vscode = {
             createFileListeners.add(listener);
             return { dispose: () => createFileListeners.delete(listener) };
         },
+        createFileSystemWatcher: () => ({
+            onDidCreate: (listener) => {
+                externalCreateListeners.add(listener);
+                return { dispose: () => externalCreateListeners.delete(listener) };
+            },
+            dispose() {}
+        }),
         onDidSaveTextDocument: (listener) => {
             saveDocumentListeners.add(listener);
             return { dispose: () => saveDocumentListeners.delete(listener) };
@@ -133,7 +141,7 @@ const vscode = {
         showErrorMessage: (message) => { events.push(`error:${message}`); },
         showWarningMessage: (message, ...options) => {
             events.push(`warning:${message}`);
-            return options.find((option) => typeof option === 'string' && /remove/i.test(option));
+            return options.find((option) => typeof option === 'string' && /remove|删除分组/i.test(option));
         },
         showInformationMessage: (message) => { events.push(`info:${message}`); },
         setStatusBarMessage: (message, timeout) => {
@@ -194,6 +202,11 @@ async function fireCreated(...filePaths) {
     await Promise.all(Array.from(createFileListeners, (listener) => listener(event)));
 }
 
+async function fireExternalCreated(...filePaths) {
+    await Promise.all(filePaths.flatMap((filePath) => Array.from(externalCreateListeners,
+        (listener) => listener(vscode.Uri.file(filePath)))));
+}
+
 async function fireSaved(filePath, isDirty = false) {
     const document = { uri: vscode.Uri.file(filePath), fileName: filePath, isDirty, isUntitled: false };
     await Promise.all(Array.from(saveDocumentListeners, (listener) => listener(document)));
@@ -243,6 +256,12 @@ async function groupForFile(fileName) {
 
 async function main() {
     const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'package.json'), 'utf8'));
+    assert.ok(manifest.contributes.menus['view/item/context'].some((entry) =>
+        entry.command === 'project.removeGroup' && entry.when === 'viewItem == FileGroup'),
+    'group deletion should be available from a Keil group');
+    assert.ok(manifest.contributes.menus['explorer/context'].some((entry) =>
+        entry.command === 'project.syncFolder'),
+    'existing folders should have a sync command in the VS Code Explorer');
     for (const command of ['project.buildAndDownload', 'project.rebuildAndDownload']) {
         assert.ok(manifest.contributes.menus['view/title'].some((entry) => entry.command === command &&
             entry.group.startsWith('navigation')), `${command} should be visible in the Keil view toolbar`);
@@ -558,6 +577,34 @@ async function main() {
     assert.strictEqual(referenceCount('auto_unique.c'), 1,
         'saving an automatically added source again must not add another reference');
 
+    const hardwareDir = path.join(testRoot, 'HARDWARE');
+    fs.mkdirSync(hardwareDir);
+    const hardwareC = path.join(hardwareDir, 'hardware_driver.c');
+    const hardwareH = path.join(hardwareDir, 'hardware_driver.h');
+    fs.writeFileSync(hardwareC, 'void hardware_driver(void) {}\n');
+    fs.writeFileSync(hardwareH, '#pragma once\n');
+    await fireExternalCreated(hardwareC, hardwareH);
+    await waitForReference('hardware_driver.c');
+    assert.strictEqual(await groupForFile('hardware_driver.c'), 'HARDWARE',
+        'Explorer-copied sources should create and use the matching Keil group');
+    assert.strictEqual(referenceCount('hardware_driver.h'), 0,
+        'headers should stay on disk instead of being added to the Keil group');
+    assert.ok(fs.readFileSync(projectPath, 'utf8').replace(/\\/g, '/').includes(
+        path.relative(projectDir, hardwareDir).replace(/\\/g, '/')),
+    'a copied C file with a sibling header should add its directory to IncludePath');
+    const hardwareGroup = provider.getChildren(provider.getChildren(projects[0])[0])
+        .find((item) => item.label === 'HARDWARE');
+    assert.ok(hardwareGroup);
+    await commands.get('project.removeGroup')(hardwareGroup);
+    assert.ok(!fs.readFileSync(projectPath, 'utf8').includes('<GroupName>HARDWARE</GroupName>'));
+    assert.strictEqual(referenceCount('hardware_driver.c'), 0);
+    assert.ok(fs.existsSync(hardwareC) && fs.existsSync(hardwareH),
+        'removing a group must keep its source and header files on disk');
+    await commands.get('project.syncFolder')(vscode.Uri.file(hardwareDir));
+    await waitForReference('hardware_driver.c');
+    assert.strictEqual(referenceCount('hardware_driver.h'), 0,
+        'folder sync should add only C files, not sibling headers');
+
     const unknownDir = path.join(testRoot, 'Core', 'NewAuto');
     const unknownPath = path.join(unknownDir, 'auto_unknown_directory.c');
     fs.mkdirSync(unknownDir, { recursive: true });
@@ -700,9 +747,8 @@ async function main() {
     await fireCreated(autoHeaderPath);
     fs.writeFileSync(autoHeaderPath, '#pragma once\n');
     await fireSaved(autoHeaderPath);
-    await waitForReference('auto_header.h');
-    assert.strictEqual(await groupForFile('auto_header.h'), 'Board & IO',
-        'new headers should use the group already associated with their directory');
+    assert.strictEqual(referenceCount('auto_header.h'), 0,
+        'new headers should not be added to Keil groups automatically');
     assert.strictEqual(events.filter((value) => value === 'quickPick').length, quickPicksBeforeHeader);
 
     const unsupportedAutoPath = path.join(testRoot, 'Core', 'Inc', 'auto_notes.txt');

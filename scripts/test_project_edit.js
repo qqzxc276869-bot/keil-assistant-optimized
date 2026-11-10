@@ -29,7 +29,8 @@ function getFiles(group) {
 
 async function run(extensionRoot = path.resolve(__dirname, '..')) {
     const { addFileToKeilProject, addFilesToKeilProject, getKeilFileType,
-        createGroupInKeilProject, removeFileFromKeilProject, addIncludeDirectoryToKeilProject } =
+        createGroupInKeilProject, removeGroupFromKeilProject,
+        removeFileFromKeilProject, addIncludeDirectoryToKeilProject } =
         require(path.join(extensionRoot, 'dist', 'src', 'KeilProjectEditor'));
     const scratchParent = path.resolve(__dirname, '..');
     const testRoot = fs.mkdtempSync(path.join(scratchParent, '.keil-assistant-project-edit-'));
@@ -215,6 +216,18 @@ async function run(extensionRoot = path.resolve(__dirname, '..')) {
             { status: 'not-present' });
         assert.strictEqual(fs.readFileSync(projectPath, 'utf8'), beforeDuplicateRemoval,
             'removing from the wrong target should not affect another target');
+        assert.deepStrictEqual(await removeGroupFromKeilProject(projectPath, 'Debug', 'Board & IO'),
+            { status: 'removed' });
+        assert.ok(!fs.readFileSync(projectPath, 'utf8').includes('<GroupName>Board &amp; IO</GroupName>'));
+        assert.ok(fs.existsSync(extraPath), 'deleting a Keil group must keep disk files');
+        assert.deepStrictEqual(await removeGroupFromKeilProject(projectPath, 'Debug', 'Board & IO'),
+            { status: 'not-present' });
+        const singleGroupPath = path.join(projectDir, 'SingleGroup.uvprojx');
+        fs.writeFileSync(singleGroupPath, '<Project><Targets><Target><TargetName>Only</TargetName>' +
+            '<Groups><Group><GroupName>HARDWARE</GroupName></Group></Groups>' +
+            '</Target></Targets></Project>');
+        assert.deepStrictEqual(await removeGroupFromKeilProject(singleGroupPath, 'Only', 'HARDWARE'),
+            { status: 'removed' }, 'deleting the last group should leave valid XML');
 
         const staleReference = path.join(projectDir, 'release.c');
         assert.ok(!fs.existsSync(staleReference), 'fixture should contain a stale project reference');
