@@ -1194,11 +1194,6 @@ abstract class Target implements IView {
         });
         vscode.window.setStatusBarMessage(successful ? '$(check) Keil 下载阶段 100%：已完成' :
             `$(error) Keil 下载失败（阶段 ${finalStagePercent}%）`, 5000);
-        if (successful) {
-            vscode.window.showInformationMessage('Keil 下载命令已完成，请查看输出中的烧录校验结果。');
-        } else {
-            vscode.window.showErrorMessage('Keil 下载未完成，请查看任务输出和烧录日志。');
-        }
         return successful;
     }
 

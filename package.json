@@ -2,7 +2,7 @@
     "name": "keil-assistant-optimized",
     "displayName": "Keil Assistant (优化版)",
     "description": "在 VS Code 中管理和编译 Keil uVision 工程",
-    "version": "1.7.23",
+    "version": "1.7.24",
     "publisher": "qqzxc276869-bot",
     "author": {
         "name": "Goal",

@@ -417,8 +417,9 @@ async function main() {
     assert.ok(buildDownloadProgress.reports.some((report) => report.increment === 33 &&
         report.message.includes('阶段 100%：校验完成')));
     assert.strictEqual(buildDownloadProgress.active, false, 'download progress should close when flashing ends');
-    assert.ok(events.some((value) => value.includes('下载命令已完成')));
     assert.ok(events.some((value) => value.includes('Keil 下载阶段 100%：已完成')));
+    assert.ok(!events.some((value) => value.startsWith('info:Keil 下载命令已完成')),
+        'successful downloads should not show a result popup');
 
     const beforeRebuildWorkflow = taskCount();
     const rebuildWorkflow = commands.get('project.rebuildAndDownload')();
@@ -1048,7 +1049,8 @@ async function main() {
     assert.ok(outputLines.join('').includes('stdout sample'));
     assert.ok(outputLines.join('').includes('stderr sample'));
     assert.ok(outputLines.join('').includes('退出码 3'));
-    const directDownloadMessages = events.filter((value) => value.includes('下载命令已完成')).length;
+    const directDownloadStatuses = events.filter((value) =>
+        value.startsWith('status:$(check) Keil 下载阶段 100%：已完成')).length;
     await commands.get('project.download')();
     assert.strictEqual(processCount(), initialProcessCount + 1, 'process close should release the no-workspace task lock');
     const directDownloadProgress = progressRuns[progressRuns.length - 1];
@@ -1061,8 +1063,11 @@ async function main() {
         await new Promise((resolve) => setTimeout(resolve, 50));
     }
     assert.strictEqual(directDownloadProgress.active, false);
-    assert.strictEqual(events.filter((value) => value.includes('下载命令已完成')).length,
-        directDownloadMessages + 1, 'direct download should report completion in Chinese');
+    assert.strictEqual(events.filter((value) =>
+        value.startsWith('status:$(check) Keil 下载阶段 100%：已完成')).length,
+        directDownloadStatuses + 1, 'direct download should report completion in the status bar');
+    assert.ok(!events.some((value) => value.startsWith('info:Keil 下载命令已完成')),
+        'direct download should not show a success popup');
     await commands.get('project.download')();
     const failedDownloadProgress = progressRuns[progressRuns.length - 1];
     const failedDownloadLog = path.join(path.dirname(secondPath), '.vscode', 'uv4.log');
@@ -1081,6 +1086,8 @@ async function main() {
     assert.ok(!failedDownloadProgress.reports.some((report) => report.message.includes('阶段 100%')),
         'a Keil flash error must not be reported as completed');
     assert.ok(events.some((value) => value.includes('Keil 下载失败（阶段 0%）')));
+    assert.ok(!events.some((value) => value.startsWith('error:Keil 下载未完成')),
+        'failed downloads should not show a result popup');
     await commands.get('project.build')();
     latestProcess.handle.emit('error', new Error('test process start failure'));
     assert.ok(events.some((value) => value.includes('Keil 编译启动失败：test process start failure')));
