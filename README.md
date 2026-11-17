@@ -19,7 +19,7 @@
 
 安装 Node.js 和 Python，在仓库目录运行 `npm ci`、`npm test`，然后运行 `python scripts/package_vsix.py`。脚本完成检查和编译后，只在仓库目录生成一份 `keil-assistant-<版本号>.vsix`，供本地安装；不再制作 Marketplace 专用包。已有的旧版安装包不会因新版本打包而删除。
 
-在 VS Code 中运行 **扩展: 从 VSIX 安装...**，选择生成的文件。需要 VS Code 1.41 或更新版本。此版的扩展标识为 `qqzxc276869-bot.keil-assistant-optimized`；如果已安装原版 `cl.keil-assistant`，建议先停用原版，避免两个扩展同时响应快捷键和工程视图。
+在 VS Code 中运行 **扩展: 从 VSIX 安装...**，选择生成的文件。需要 VS Code 1.41 或更新版本。此版的扩展标识为 `qqzxc276869-bot.keil-assistant-optimized-276869`；如果已安装原版 `cl.keil-assistant`，建议先停用原版，避免两个扩展同时响应快捷键和工程视图。
 
 ## [English](./README_EN.md)
 
