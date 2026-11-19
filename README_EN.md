@@ -19,7 +19,7 @@ Builds and downloads still use the locally installed Keil tools. Groups and file
 
 Install Node.js and Python. In the repository directory, run `npm ci` and `npm test`, then run `python scripts/package_vsix.py`. The script checks and builds the extension, then creates one local installer named `keil-assistant-<version>.vsix` in the repository directory. It does not create a separate Marketplace package. Packaging a new version does not delete installers for older versions.
 
-In VS Code 1.41 or newer, run **Extensions: Install from VSIX...** and select that file. This build's extension ID is `qqzxc276869-bot.keil-assistant-optimized-276869`. If the original `cl.keil-assistant` is installed, disable it first to avoid two extensions handling the same shortcuts and project view.
+In VS Code 1.42 or newer, run **Extensions: Install from VSIX...** and select that file. This build's extension ID is `qqzxc276869-bot.keil-assistant-optimized-276869`. If the original `cl.keil-assistant` is installed, disable it first to avoid two extensions handling the same shortcuts and project view.
 
 ## [简体中文](./README.md)
 

@@ -2,7 +2,7 @@
     "name": "keil-assistant-optimized-276869",
     "displayName": "Keil Assistant (优化版) · Goal",
     "description": "在 VS Code 中管理和编译 Keil uVision 工程",
-    "version": "1.7.25",
+    "version": "1.7.26",
     "publisher": "qqzxc276869-bot",
     "author": {
         "name": "Goal",
@@ -17,7 +17,7 @@
     ],
     "homepage": "https://github.com/qqzxc276869-bot/keil-assistant-optimized",
     "engines": {
-        "vscode": "^1.41.0"
+        "vscode": "^1.42.0"
     },
     "categories": [
         "Programming Languages",
@@ -166,42 +166,27 @@
             {
                 "command": "project.build",
                 "title": "编译",
-                "icon": {
-                    "light": "./res/icons/BuildSelection_16x.svg",
-                    "dark": "./res/icons/BuildSelection_16x.svg"
-                }
+                "icon": "$(tools)"
             },
             {
                 "command": "project.rebuild",
                 "title": "重新编译",
-                "icon": {
-                    "light": "./res/icons/BuildSolution_16x.svg",
-                    "dark": "./res/icons/BuildSolution_16x.svg"
-                }
+                "icon": "$(sync)"
             },
             {
                 "command": "project.download",
-                "title": "下载到设备",
-                "icon": {
-                    "light": "./res/icons/TransferDownload_16x.svg",
-                    "dark": "./res/icons/TransferDownload_16x.svg"
-                }
+                "title": "直接下载到设备",
+                "icon": "$(arrow-down)"
             },
             {
                 "command": "project.buildAndDownload",
                 "title": "编译并下载到设备",
-                "icon": {
-                    "light": "./res/icons/BuildDownload_16x-light.svg",
-                    "dark": "./res/icons/BuildDownload_16x.svg"
-                }
+                "icon": "$(arrow-down)"
             },
             {
                 "command": "project.rebuildAndDownload",
                 "title": "重新编译并下载到设备",
-                "icon": {
-                    "light": "./res/icons/RebuildDownload_16x-light.svg",
-                    "dark": "./res/icons/RebuildDownload_16x.svg"
-                }
+                "icon": "$(sync)"
             },
             {
                 "command": "project.selectActiveTarget",

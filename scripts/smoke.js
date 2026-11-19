@@ -267,8 +267,10 @@ async function main() {
             entry.group.startsWith('navigation')), `${command} should be visible in the Keil view toolbar`);
         assert.ok(manifest.contributes.menus['view/item/context'].some((entry) => entry.command === command &&
             entry.group === 'inline'), `${command} should be visible on a Keil target row`);
-        const icon = manifest.contributes.commands.find((entry) => entry.command === command)?.icon?.light;
-        assert.ok(icon && fs.existsSync(path.join(extensionRoot, icon)), `${command} needs a visible icon`);
+        const icon = manifest.contributes.commands.find((entry) => entry.command === command)?.icon;
+        const builtInIcon = typeof icon === 'string' && /^\$\([a-z-]+\)$/.test(icon);
+        const svgIcon = icon?.light && fs.existsSync(path.join(extensionRoot, icon.light));
+        assert.ok(builtInIcon || svgIcon, `${command} needs a visible icon`);
     }
     const extension = require(path.join(extensionRoot, 'dist', 'src', 'extension'));
     const context = {
