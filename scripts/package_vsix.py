@@ -65,6 +65,7 @@ manifest = f'''<?xml version="1.0" encoding="utf-8"?>
     <Description>{escape(PACKAGE['description'])}</Description>
     <Tags>{escape(','.join(PACKAGE['keywords']))}</Tags>
     <Categories>{escape(','.join(PACKAGE['categories']))}</Categories>
+    <GalleryFlags>Public</GalleryFlags>
     <Properties><Property Id="Microsoft.VisualStudio.Code.Engine" Value="{escape(PACKAGE['engines']['vscode'])}" /></Properties>
     <License>extension/LICENSE.txt</License>
     <Icon>extension/res/icons/icon.png</Icon>
