@@ -28,6 +28,7 @@ export function missingHeadersFromBuildLog(log: string): string[] {
     for (const line of log.split(/\r?\n/)) {
         if (!/\berror\b|\bfatal\b/i.test(line)) { continue; }
         const match = /cannot open source input file\s*["']([^"']+)["']/i.exec(line) ||
+            /fatal error:\s*['"](.+?)['"]\s+file not found\b/i.exec(line) ||
             /fatal error:\s*([^:\r\n]+?)\s*:\s*No such file or directory/i.exec(line) ||
             /can't open file\s*["']([^"']+)["']/i.exec(line);
         const name = match && match[1].trim();

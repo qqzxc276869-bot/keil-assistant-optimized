@@ -2,7 +2,7 @@
     "name": "keil-assistant-optimized-276869",
     "displayName": "Keil Assistant (优化版) · Goal",
     "description": "在 VS Code 中管理和编译 Keil uVision 工程",
-    "version": "1.7.26",
+    "version": "1.7.28",
     "publisher": "qqzxc276869-bot",
     "author": {
         "name": "Goal",
@@ -46,6 +46,7 @@
         "onCommand:project.build",
         "onCommand:project.rebuild",
         "onCommand:project.download",
+        "onCommand:project.selectDownloadTool",
         "onCommand:project.buildAndDownload",
         "onCommand:project.rebuildAndDownload",
         "onCommand:project.selectActiveTarget",
@@ -92,7 +93,7 @@
                     "KeilAssistant.Project.AutoAddNewFiles": {
                         "type": "boolean",
                         "scope": "resource",
-                        "markdownDescription": "自动将 VS Code 中新建并首次保存、或从文件资源管理器复制到工作区的 .c 文件加入 Keil 分组；头文件不加入分组。文件夹对应多个分组时，选择一次后会记住。",
+                        "markdownDescription": "自动将 VS Code 中新建并首次保存、或从 Windows 文件资源管理器单独或随目录拖入的 `.c` 文件加入 Keil 分组。头文件用于补充搜索路径。归属不明确时，选择一次后会记住。",
                         "default": true
                     }
                 }
@@ -193,6 +194,10 @@
                 "title": "选择当前 Keil 工程和编译目标"
             },
             {
+                "command": "project.selectDownloadTool",
+                "title": "切换 Keil 下载工具"
+            },
+            {
                 "command": "item.copyValue",
                 "title": "复制条目内容",
                 "icon": {
@@ -255,6 +260,11 @@
                 }
             ],
             "view/item/context": [
+                {
+                    "command": "project.selectDownloadTool",
+                    "group": "1_keil@2",
+                    "when": "view == project && (viewItem == Target || viewItem == Project)"
+                },
                 {
                     "command": "project.createGroup",
                     "when": "viewItem == Project || viewItem == Target"
@@ -319,15 +329,18 @@
         "keybindings": [
             {
                 "command": "project.build",
-                "key": "f7"
+                "key": "f7",
+                "when": "keilAssistant.hasActiveTarget"
             },
             {
                 "command": "project.rebuild",
-                "key": "ctrl+alt+f7"
+                "key": "ctrl+alt+f7",
+                "when": "keilAssistant.hasActiveTarget"
             },
             {
                 "command": "project.download",
-                "key": "ctrl+alt+d"
+                "key": "ctrl+alt+d",
+                "when": "keilAssistant.hasActiveTarget"
             }
         ],
         "snippets": [
@@ -409,7 +422,7 @@
                 "fileLocation": "autoDetect",
                 "pattern": [
                     {
-                        "regexp": "^(.+):(\\d+):(\\d+):\\s+(\\w+):\\s+(.*)$",
+                        "regexp": "^(.+):(\\d+):(\\d+):\\s+(?:fatal\\s+)?(\\w+):\\s+(.*)$",
                         "file": 1,
                         "line": 2,
                         "column": 3,
@@ -425,7 +438,7 @@
         "build": "node scripts/build.js",
         "check": "node scripts/check.js",
         "pretest": "npm run build",
-        "test": "node scripts/smoke.js && node scripts/test_cpp_config.js && node scripts/test_header_path_resolver.js"
+        "test": "node scripts/smoke.js && node scripts/test_cpp_config.js && node scripts/test_header_path_resolver.js && node scripts/test_download_tools.js"
     },
     "devDependencies": {
         "@types/node": "^12.11.7",

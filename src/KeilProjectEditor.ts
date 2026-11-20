@@ -171,22 +171,29 @@ function buffersEqual(left: Buffer, right: Buffer): boolean {
 
 function readUtf8Project(projectPath: string): { buffer: Buffer, xml: string } {
     const buffer = fs.readFileSync(projectPath);
+    return { buffer, xml: decodeUtf8Project(buffer) };
+}
+
+function decodeUtf8Project(buffer: Buffer): string {
     const xml = buffer.toString('utf8');
     const declaration = /^\uFEFF?<\?xml[^?]*encoding\s*=\s*["']([^"']+)["']/i.exec(xml);
     if (!buffersEqual(Buffer.from(xml, 'utf8'), buffer) || (declaration && !/^utf-?8$/i.test(declaration[1]))) {
         throw new Error('Keil 工程不是 UTF-8 编码，未进行修改。');
     }
-    return { buffer, xml };
+    return xml;
 }
 
-function writeProjectChange(projectPath: string, original: Buffer, updated: string): void {
+function writeProjectChange(projectPath: string, original: Buffer | undefined, updated: string): void {
     const temporaryPath = `${projectPath}.keil-assistant-${process.pid}-${crypto.randomBytes(4).toString('hex')}.tmp`;
     try {
         fs.writeFileSync(temporaryPath, updated, { encoding: 'utf8', flag: 'wx' });
-        if (!buffersEqual(fs.readFileSync(projectPath), original)) {
+        if (original === undefined) {
+            fs.copyFileSync(temporaryPath, projectPath, fs.constants.COPYFILE_EXCL);
+        } else if (buffersEqual(fs.readFileSync(projectPath), original)) {
+            fs.renameSync(temporaryPath, projectPath);
+        } else {
             throw new Error('编辑期间 Keil 工程发生变化，请重试。');
         }
-        fs.renameSync(temporaryPath, projectPath);
     } finally {
         if (fs.existsSync(temporaryPath)) { fs.unlinkSync(temporaryPath); }
     }
@@ -476,6 +483,164 @@ function includePathText(value: any): string {
     }
     if (value === undefined) { return ''; }
     throw new Error('所选 Keil 头文件路径包含不支持的 XML 内容。');
+}
+
+export interface KeilDownloadConfiguration {
+    cpuDll: string;
+    mode: 'debug' | 'external' | 'separate';
+    driver: string;
+}
+
+function readOptionsBuffer(optionsPath: string): Buffer | undefined {
+    try { return fs.readFileSync(optionsPath); }
+    catch (error) {
+        if ((<NodeJS.ErrnoException>error).code === 'ENOENT') { return undefined; }
+        throw error;
+    }
+}
+
+async function findNamedTarget(xml: string, optionsFile: boolean, name: string, allowMissing = false):
+    Promise<{ data: any; index: number; count: number }> {
+    const document = await xml2js.parseStringPromise(xml, { explicitArray: false });
+    const root = optionsFile ? document.ProjectOpt : document.Project?.Targets;
+    if (!root || typeof root !== 'object') { throw new Error('无法读取 Keil 工程的 Target 列表。'); }
+    const targets = asArray<any>(root.Target);
+    const matches = targets.map((target, index) => target.TargetName === name ? index : -1).filter((index) => index >= 0);
+    if (matches.length > 1 || (!matches.length && !allowMissing)) {
+        throw new Error('找不到唯一的 Keil Target：' + name);
+    }
+    const index = matches.length ? matches[0] : -1;
+    return { data: targets[index], index, count: targets.length };
+}
+
+function keilOptionsPath(projectPath: string): string {
+    if (node_path.extname(projectPath).toLowerCase() !== '.uvprojx') {
+        throw new Error('切换下载工具适用于 Keil MDK 的 .uvprojx 工程。');
+    }
+    return projectPath.slice(0, -'.uvprojx'.length) + '.uvoptx';
+}
+
+function flashMode(utilities: any): KeilDownloadConfiguration['mode'] {
+    if (includePathText(utilities?.Flash1?.UseExternalTool) === '1') { return 'external'; }
+    return includePathText(utilities?.Flash1?.UseTargetDll) === '1' &&
+        includePathText(utilities?.bUseTDR) === '1' ? 'debug' : 'separate';
+}
+
+export async function readKeilDownloadConfiguration(projectPath: string, targetName: string):
+    Promise<KeilDownloadConfiguration> {
+    const optionsPath = keilOptionsPath(projectPath);
+    // Release the file handle before awaiting XML parsing. Windows can reject a
+    // simultaneous atomic project rename while an asynchronous read is pending.
+    const { xml: projectXml } = readUtf8Project(projectPath);
+    const { data } = await findNamedTarget(projectXml, false, targetName);
+    const options = data.TargetOption;
+    const utilities = options?.Utilities;
+    const mode = flashMode(utilities);
+    const fallback = includePathText(utilities?.Flash2).trim();
+    let driver = mode === 'external' ? '' : fallback;
+    if (mode === 'debug') {
+        const buffer = readOptionsBuffer(optionsPath);
+        if (buffer) {
+            const opt = await findNamedTarget(decodeUtf8Project(buffer), true, targetName, true);
+            driver = includePathText(opt.data?.TargetOption?.DebugOpt?.pMon).trim() || fallback;
+        }
+    }
+    return { cpuDll: (includePathText(options?.DllOption?.TargetDllName) ||
+        includePathText(options?.DllOption?.SimDllName)).trim(), mode, driver };
+}
+
+function replaceElementText(xml: string, element: XmlElement, value: string): string {
+    const content = xml.slice(element.openEnd, element.closeStart);
+    if (element.children.length || content.includes('<')) {
+        throw new Error('无法安全编辑 Keil 的 <' + element.name + '> 节点。');
+    }
+    const start = element.selfClosing ?
+        xml.slice(element.start, element.openEnd).replace(/\s*\/\s*>$/, '>') :
+        xml.slice(element.start, element.openEnd);
+    return xml.slice(0, element.start) + start + xmlEscape(value) + '</' + element.name + '>' + xml.slice(element.end);
+}
+
+function optionsRoot(xml: string): XmlElement {
+    const root = scanElements(xml).find((element) => element.name === 'ProjectOpt');
+    if (!root) { throw new Error('Keil 选项中缺少 <ProjectOpt> 节点。'); }
+    return root;
+}
+
+/** Change the debug dropdown and make Flash download follow it. Keep the other drivers' settings. */
+export async function setKeilDownloadDriver(projectPath: string, targetName: string, dll: string,
+    generateOptions: (device: string) => Promise<string>, beforeWrite: () => void = () => {}): Promise<boolean> {
+    if (!/\.dll$/i.test(dll) || /[\u0000-\u001f]/.test(dll)) { throw new Error('无效的 Keil 下载驱动路径。'); }
+    const optionsPath = keilOptionsPath(projectPath);
+    const project = readUtf8Project(projectPath);
+    const target = await findNamedTarget(project.xml, false, targetName);
+    let nextProject = project.xml;
+    if (flashMode(target.data.TargetOption?.Utilities) !== 'debug') {
+        const record = targetElement(project.xml, target.count, target.index);
+        const utilities = one(one(record, 'TargetOption'), 'Utilities');
+        const flash = one(utilities, 'Flash1');
+        const flags = [
+            { element: one(flash, 'UseTargetDll'), value: '1' },
+            { element: one(flash, 'UseExternalTool'), value: '0' },
+            { element: one(utilities, 'bUseTDR'), value: '1' }
+        ];
+        for (const flag of flags.sort((a, b) => b.element.start - a.element.start)) {
+            nextProject = replaceElementText(nextProject, flag.element, flag.value);
+        }
+    }
+
+    const originalOptions = readOptionsBuffer(optionsPath);
+    let optionsXml = originalOptions ? decodeUtf8Project(originalOptions) : '';
+    const optTarget = optionsXml ? await findNamedTarget(optionsXml, true, targetName, true) : undefined;
+    if (!optTarget?.data) {
+        const device = includePathText(target.data.TargetOption?.TargetCommonOption?.Device).trim();
+        if (!device) { throw new Error('Keil 工程没有设备名称，无法生成默认调试选项。'); }
+        const generated = await generateOptions(device);
+        const templateTarget = one(optionsRoot(generated), 'Target');
+        const updatedTemplate = replaceElementText(generated, one(templateTarget, 'TargetName'), targetName);
+        if (optionsXml) {
+            // Add the new Target before top-level Group records, as required by Keil's options format.
+            const named = one(optionsRoot(updatedTemplate), 'Target');
+            const root = optionsRoot(optionsXml);
+            const eol = optionsXml.includes('\r\n') ? '\r\n' : '\n';
+            const block = updatedTemplate.slice(named.start, named.end).replace(/\r?\n/g, eol);
+            const beforeGroup = direct(root, 'Group')[0];
+            optionsXml = beforeGroup ?
+                optionsXml.slice(0, beforeGroup.start) + block + eol + '  ' + optionsXml.slice(beforeGroup.start) :
+                insertBeforeClose(optionsXml, root, '  ' + block, eol, '');
+        } else {
+            optionsXml = updatedTemplate;
+        }
+    }
+    const opt = await findNamedTarget(optionsXml, true, targetName);
+    const optionTargets = direct(optionsRoot(optionsXml), 'Target');
+    if (optionTargets.length !== opt.count) { throw new Error('无法匹配 Keil 选项中的 Target。'); }
+    const debug = one(one(optionTargets[opt.index], 'TargetOption'), 'DebugOpt');
+    const nextOptions = replaceElementText(optionsXml, one(debug, 'pMon'), dll);
+    const optionsChanged = !originalOptions || !buffersEqual(Buffer.from(nextOptions, 'utf8'), originalOptions);
+    if (!optionsChanged && nextProject === project.xml) { return false; }
+    beforeWrite();
+    if (!buffersEqual(fs.readFileSync(projectPath), project.buffer)) {
+        throw new Error('编辑期间 Keil 工程发生变化，请重试。');
+    }
+    if (optionsChanged) { writeProjectChange(optionsPath, originalOptions, nextOptions); }
+    try {
+        if (nextProject !== project.xml) { writeProjectChange(projectPath, project.buffer, nextProject); }
+    } catch (error) {
+        if (optionsChanged) {
+            const written = Buffer.from(nextOptions, 'utf8');
+            try {
+                if (originalOptions) {
+                    writeProjectChange(optionsPath, written, decodeUtf8Project(originalOptions));
+                } else if (buffersEqual(fs.readFileSync(optionsPath), written)) {
+                    fs.unlinkSync(optionsPath);
+                }
+            } catch (rollback) {
+                throw new Error('写入下载模式失败，且 Keil 选项未能恢复：' + (<Error>rollback).message);
+            }
+        }
+        throw error;
+    }
+    return true;
 }
 
 /** Add an existing directory to one target's compiler include paths. Other targets are untouched. */

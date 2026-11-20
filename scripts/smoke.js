@@ -28,6 +28,8 @@ fs.writeFileSync(projectPath, `<?xml version="1.0" encoding="UTF-8"?>
 const commands = new Map();
 const state = new Map();
 const events = [];
+const contextKeys = new Map();
+let mdkExePath = process.execPath;
 let provider;
 let latestTask;
 let latestProcess;
@@ -77,14 +79,17 @@ const vscode = {
     },
     commands: {
         registerCommand: (name, callback) => { commands.set(name, callback); return { dispose() {} }; },
-        executeCommand: (name) => { events.push(`command:${name}`); }
+        executeCommand: (name, key, value) => {
+            events.push('command:' + name);
+            if (name === 'setContext') { contextKeys.set(key, value); }
+        }
     },
     workspace: {
         workspaceFolders: [folder],
         getWorkspaceFolder: (uri) => uri.fsPath.startsWith(testRoot + path.sep) ? folder : undefined,
         findFiles: async () => [{ fsPath: projectPath }],
         getConfiguration: () => ({ get: (name) => {
-            if (name === 'MDK.Uv4Path') { return process.execPath; }
+            if (name === 'MDK.Uv4Path') { return mdkExePath; }
             if (name === 'Project.ExcludeList' || name === 'Project.FileLocationList') { return []; }
             if (name === 'Project.AutoAddNewFiles') { return autoAddEnabled; }
             return undefined;
@@ -133,8 +138,9 @@ const vscode = {
             lastOpenDialogOptions = options;
             return dialogSelections || (dialogSelection ? [dialogSelection] : undefined);
         },
-        showQuickPick: async (items) => {
+        showQuickPick: async (items, options) => {
             events.push('quickPick');
+            if (options?.canPickMany) { return items.filter(quickPickSelection || (() => true)); }
             return quickPickSelection ? items.find(quickPickSelection) : items[0];
         },
         showInputBox: async () => 'Board & IO',
@@ -254,8 +260,191 @@ async function groupForFile(fileName) {
     return undefined;
 }
 
+async function testProjectOwnershipAndRestore() {
+    const root = path.join(testRoot, 'Workspace');
+    const workspace = { name: 'Workspace', uri: vscode.Uri.file(root) };
+    vscode.workspace.workspaceFolders = [workspace];
+    vscode.workspace.getWorkspaceFolder = (uri) =>
+        uri.fsPath === root || uri.fsPath.startsWith(root + path.sep) ? workspace : undefined;
+    const a = path.join(root, 'A', 'USER', 'Template.uvprojx');
+    const b = path.join(root, 'B', 'USER', 'Template.uvprojx');
+    const drivers = path.join(root, 'A', 'DRIVERS');
+    const foreignDrivers = path.join(root, 'B', 'DRIVERS');
+    for (const dir of [path.dirname(a), path.dirname(b), drivers, foreignDrivers]) {
+        fs.mkdirSync(dir, { recursive: true });
+    }
+    const sensor = path.join(drivers, 'sensor.c');
+    fs.writeFileSync(sensor, '');
+    const source = '<File><FileName>sensor.c</FileName><FileType>1</FileType>' +
+        '<FilePath>../DRIVERS/sensor.c</FilePath></File>';
+    const targetXml = (name, files) => '<Target><TargetName>' + name + '</TargetName>' +
+        '<TargetOption><TargetCommonOption/><TargetArmAds><Cads/></TargetArmAds></TargetOption>' +
+        '<Groups><Group><GroupName>DRIVERS</GroupName><Files>' + files + '</Files></Group></Groups></Target>';
+    const projectXml = (...targets) => '<Project><Targets>' + targets.join('') + '</Targets></Project>';
+    const initial = projectXml(targetXml('Debug', source));
+    fs.writeFileSync(a, initial);
+    fs.writeFileSync(b, projectXml(targetXml('Debug', '')));
+    state.clear();
+    vscode.workspace.findFiles = async () => [a, b].map(vscode.Uri.file);
+    quickPickSelection = (item) => item.projectPath === a;
+    await provider.loadWorkspace();
+    assert.deepStrictEqual(provider.getChildren().map((project) => project.uvprjFile.path), [a]);
+    const selectedProjects = state.get('KeilAssistant.SelectedProjects');
+    await commands.get('project.close')();
+    state.set('KeilAssistant.SelectedProjects', selectedProjects);
+    await provider.loadWorkspace();
+    assert.deepStrictEqual(provider.getChildren().map((project) => project.uvprjFile.path), [a],
+        'restoring A must keep the unselected B closed');
+    assert.deepStrictEqual(state.get('KeilAssistant.SelectedProjects'), [a]);
+
+    // Same group and project names on both sides, only A loaded. Dismiss once for the whole directory.
+    fs.writeFileSync(path.join(foreignDrivers, 'keyboard.c'), '');
+    fs.writeFileSync(path.join(foreignDrivers, 'mouse.c'), '');
+    quickPickSelection = () => false;
+    const picks = events.filter((value) => value === 'quickPick').length;
+    await fireExternalCreated(foreignDrivers, path.join(foreignDrivers, 'keyboard.c'));
+    assert.strictEqual(events.filter((value) => value === 'quickPick').length, picks + 1);
+    assert.strictEqual(fs.readFileSync(a, 'utf8'), initial);
+    quickPickSelection = (item) => item.projectPath === b;
+    await commands.get('explorer.discover')();
+    assert.deepStrictEqual(provider.getChildren().map((project) => project.uvprjFile.path), [a, b]);
+
+    fs.writeFileSync(a, projectXml(targetXml('Debug', source), targetXml('Release', '')));
+    const project = provider.getChildren()[0];
+    await project.reload();
+    const directoryKey = process.platform === 'win32' ? drivers.toLowerCase() : drivers;
+    state.set('KeilAssistant.AutoAdd.DirectoryMappings', {
+        [directoryKey]: { projectPath: a, targetName: 'Release', groupName: 'DRIVERS' }
+    });
+    for (let i = 0; i < 2; i++) {
+        await commands.get('project.syncFolder')(vscode.Uri.file(drivers));
+    }
+    const xml = await require('xml2js').parseStringPromise(fs.readFileSync(a, 'utf8'));
+    for (const target of xml.Project.Targets[0].Target) {
+        const files = target.Groups[0].Group[0].Files[0].File;
+        assert.deepStrictEqual(files.map((file) => file.FileName[0]), ['sensor.c'],
+            'both targets should contain exactly one sensor.c reference');
+    }
+    quickPickSelection = undefined;
+    for (const loaded of provider.getChildren()) { await commands.get('project.close')(loaded); }
+    return root;
+}
+
+async function testArmCompilerCpu(root) {
+    const uv4 = path.join(root, 'Keil', 'UV4', 'UV4.exe');
+    const compiler = path.join(root, 'Keil', 'ARM', 'ARMCLANG', 'bin', 'armclang.exe');
+    fs.mkdirSync(path.dirname(compiler), { recursive: true });
+    fs.writeFileSync(compiler, '');
+    const projectPath = path.join(root, 'Cpu.uvprojx');
+    const target = (name, cpu, adsCpu) => '<Target><TargetName>' + name + '</TargetName><uAC6>1</uAC6>' +
+        '<TargetOption><TargetCommonOption><Cpu>CPUTYPE("' + cpu + '")</Cpu></TargetCommonOption>' +
+        '<TargetArmAds><ArmAdsMisc><AdsCpuType>' + adsCpu + '</AdsCpuType></ArmAdsMisc><Cads/></TargetArmAds>' +
+        '</TargetOption></Target>';
+    fs.writeFileSync(projectPath, '<Project><Targets>' + target('F103', 'Cortex-M3', '') +
+        target('Override', 'Cortex-M3', '"Cortex-M0"') + target('F103 Copy', 'Cortex-M3', '') +
+        '</Targets></Project>');
+    const requests = [];
+    const originalExecFile = childProcess.execFile;
+    mdkExePath = uv4;
+    childProcess.execFile = (exe, args, options, callback) => {
+        assert.strictEqual(exe, compiler);
+        const cpu = args.find((arg) => arg.startsWith('-mcpu='));
+        requests.push(cpu);
+        const macro = cpu === '-mcpu=cortex-m3' ? '__ARM_ARCH_7M__' : '__ARM_ARCH_6M__';
+        setImmediate(() => callback(null, '#define ' + macro + ' 1\n', ''));
+        return { stdin: { end() {} } };
+    };
+    try {
+        dialogSelection = vscode.Uri.file(projectPath);
+        await commands.get('explorer.open')();
+        const configs = JSON.parse(fs.readFileSync(path.join(root, '.vscode', 'c_cpp_properties.json'), 'utf8'));
+        const defines = (name) => configs.configurations.find((item) => item.name === 'Cpu.uvprojx: ' + name).defines;
+        assert.ok(defines('F103').includes('__ARM_ARCH_7M__=1'));
+        assert.ok(defines('Override').includes('__ARM_ARCH_6M__=1'));
+        assert.ok(defines('F103 Copy').includes('__ARM_ARCH_7M__=1'));
+        assert.deepStrictEqual(requests, ['-mcpu=cortex-m3', '-mcpu=cortex-m0']);
+    } finally {
+        childProcess.execFile = originalExecFile;
+        mdkExePath = process.execPath;
+    }
+}
+
+async function testDownloadToolControls(root) {
+    const base = path.join(root, 'Download');
+    fs.mkdirSync(base);
+    const fixture = path.join(base, 'Probe.uvprojx');
+    const options = path.join(base, 'Probe.uvoptx');
+    const install = path.join(base, 'Keil');
+    const uv4 = path.join(install, 'UV4', 'UV4.exe');
+    const stLinkDll = 'STLink\\ST-LINKIII-KEIL_SWO.dll';
+    const jLinkDll = 'Segger\\JL2CM3.dll';
+    for (const file of [uv4, path.join(install, 'ARM', ...stLinkDll.split('\\')),
+        path.join(install, 'ARM', ...jLinkDll.split('\\'))]) {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, '');
+    }
+    fs.writeFileSync(path.join(install, 'TOOLS.INI'), [
+        '[ARM]', 'CPUDLL0=SARMCM3.DLL(TDRV0,TDRV1)',
+        'TDRV0=' + stLinkDll + '("ST-Link Debugger")', 'TDRV1=' + jLinkDll + '("J-LINK / J-TRACE Cortex")'
+    ].join('\r\n'));
+    fs.writeFileSync(fixture, '<Project><Targets><Target><TargetName>Download</TargetName><TargetOption>' +
+        '<TargetArmAds><Cads/></TargetArmAds><DllOption><TargetDllName>SARMCM3.DLL</TargetDllName></DllOption>' +
+        '<Utilities><Flash1><UseTargetDll>1</UseTargetDll><UseExternalTool>0</UseExternalTool></Flash1>' +
+        '<bUseTDR>1</bUseTDR><Flash2>' + stLinkDll + '</Flash2></Utilities></TargetOption></Target></Targets></Project>');
+    fs.writeFileSync(options, '<ProjectOpt><Target><TargetName>Download</TargetName><TargetOption>' +
+        '<DebugOpt><pMon>' + stLinkDll + '</pMon></DebugOpt></TargetOption></Target></ProjectOpt>');
+    const tools = require(path.join(extensionRoot, 'dist', 'src', 'KeilDownloadTools'));
+    const enumerate = tools.queryWindowsUsbDevices;
+    let usb = [{ id: 'USB\\VID_1366&PID_0101\\test', name: 'SEGGER J-Link', problem: 0 }];
+    tools.queryWindowsUsbDevices = async () => usb;
+    mdkExePath = uv4;
+    try {
+        dialogSelection = vscode.Uri.file(fixture);
+        await commands.get('explorer.open')();
+        quickPickSelection = choice => choice.target?.targetName === 'Download';
+        await commands.get('project.selectActiveTarget')();
+        const item = statusItems.find(item => item.command === 'project.selectDownloadTool');
+        assert.ok(item.visible);
+        const waitForStatus = async (text, attempts = 75) => {
+            for (let i = 0; i < attempts && !item.text.includes(text); i++) {
+                await new Promise(resolve => setTimeout(resolve, 20));
+            }
+            assert.ok(item.text.includes(text), 'Expected ' + text + ', got ' + item.text);
+        };
+        await waitForStatus('ST-Link · 未检测到 USB');
+
+        const taskCount = () => events.filter(value => value === 'task').length;
+        const count = taskCount();
+        quickPickSelection = choice => choice.driver?.dll === jLinkDll;
+        await commands.get('project.selectDownloadTool')();
+        assert.strictEqual(taskCount(), count, 'Changing the driver must not flash the device');
+        assert.ok(fs.readFileSync(options, 'utf8').includes('<pMon>' + jLinkDll + '</pMon>'));
+        await waitForStatus('J-Link · USB 已连接');
+
+        await commands.get('project.build')();
+        assert.strictEqual(taskCount(), count + 1);
+        quickPickSelection = choice => choice.driver?.dll === stLinkDll;
+        await commands.get('project.selectDownloadTool')();
+        assert.ok(fs.readFileSync(options, 'utf8').includes('<pMon>' + jLinkDll + '</pMon>'));
+        finishTask();
+        usb = [];
+        await waitForStatus('J-Link · 未检测到 USB', 350);
+    } finally {
+        tools.queryWindowsUsbDevices = enumerate;
+        mdkExePath = process.execPath;
+        quickPickSelection = undefined;
+    }
+}
+
 async function main() {
     const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'package.json'), 'utf8'));
+    const gcc = manifest.contributes.problemMatchers.find((matcher) => matcher.name === 'gcc').pattern[0];
+    const diagnostic = new RegExp(gcc.regexp).exec("main.c:1:10: fatal error: 'lcd.h' file not found");
+    assert.ok(diagnostic);
+    assert.strictEqual(diagnostic[gcc.severity], 'error');
+    assert.strictEqual(diagnostic[gcc.file], 'main.c');
+    assert.deepStrictEqual(manifest.contributes.keybindings.map((key) => key.when),
+        Array(3).fill('keilAssistant.hasActiveTarget'));
     assert.ok(manifest.contributes.menus['view/item/context'].some((entry) =>
         entry.command === 'project.removeGroup' && entry.when === 'viewItem == FileGroup'),
     'group deletion should be available from a Keil group');
@@ -282,7 +471,8 @@ async function main() {
         }
     };
     extension.activate(context);
-    assert.strictEqual(statusItems.length, 5);
+    assert.strictEqual(contextKeys.get('keilAssistant.hasActiveTarget'), false);
+    assert.strictEqual(statusItems.length, 6);
     assert.strictEqual(statusItems[0].command, 'explorer.open');
     assert.strictEqual(statusItems[0].visible, true);
     assert.ok(statusItems.slice(1).every((item) => !item.visible));
@@ -291,11 +481,13 @@ async function main() {
     }
     const projects = provider.getChildren();
     assert.strictEqual(projects.length, 1, 'nested project should load');
+    assert.strictEqual(contextKeys.get('keilAssistant.hasActiveTarget'), true);
     assert.strictEqual(projects[0].uvprjFile.path, projectPath);
     assert.ok(statusItems[0].text.includes('Target 1'));
     assert.ok(statusItems.slice(1).every((item) => item.visible));
     assert.deepStrictEqual(statusItems.slice(1).map((item) => item.command),
-        ['project.build', 'project.rebuild', 'project.buildAndDownload', 'project.rebuildAndDownload']);
+        ['project.build', 'project.rebuild', 'project.buildAndDownload', 'project.rebuildAndDownload',
+            'project.selectDownloadTool']);
     assert.ok(statusItems[3].text.includes('编译下载'));
     assert.ok(statusItems[4].text.includes('重新编译下载'));
     const uncPath = '\\\\server\\share\\include\\board.h';
@@ -461,6 +653,11 @@ async function main() {
         await new Promise((resolve) => setTimeout(resolve, 10));
     }
     assert.strictEqual(taskCount(), beforeUnknownResult + 1);
+    const beforeCancelledXml = fs.readFileSync(projectPath);
+    const cancelledDir = path.join(projectDir, 'CancelledDriver');
+    fs.mkdirSync(cancelledDir);
+    fs.writeFileSync(path.join(cancelledDir, 'cancelled.h'), '');
+    fs.writeFileSync(buildLogPath, "main.c:1:10: fatal error: 'cancelled.h' file not found\n");
     for (const listener of Array.from(taskEndListeners)) {
         listener({ execution: { task: latestTask } });
     }
@@ -468,6 +665,8 @@ async function main() {
     assert.strictEqual(taskCount(), beforeUnknownResult + 1,
         'a task without a process exit result must not start flashing');
     assert.strictEqual(taskProcessEndListeners.size, 0);
+    assert.deepStrictEqual(fs.readFileSync(projectPath), beforeCancelledXml,
+        'an unknown exit must not edit IncludePath even when the current log names a repairable header');
     const beforeUnsavedWorkflow = taskCount();
     saveAllResult = false;
     await commands.get('project.buildAndDownload')();
@@ -530,8 +729,8 @@ async function main() {
     const beforeAmbiguousRepair = taskCount();
     await commands.get('project.build')();
     fs.writeFileSync(buildLogPath,
-        '..\\USER\\main.h(14): error:  #5: cannot open source input file "driver.h": No such file or directory\n');
-    finishTask();
+        "main.c:1:10: fatal error: 'driver.h' file not found\n");
+    finishTask(latestTask, 1);
     await waitForTaskCount(beforeAmbiguousRepair + 2);
     quickPickSelection = undefined;
     assert.ok(fs.readFileSync(projectPath, 'utf8').replace(/\\/g, '/').includes(
@@ -546,7 +745,7 @@ async function main() {
     await commands.get('project.build')();
     fs.writeFileSync(buildLogPath,
         '..\\USER\\main.h(14): error:  #5: cannot open source input file "not_copied.h": No such file or directory\n');
-    finishTask();
+    finishTask(latestTask, 1);
     await new Promise((resolve) => setTimeout(resolve, 100));
     assert.strictEqual(taskCount(), beforeMissingHeader + 1,
         'a header absent from the project must not trigger a blind build retry');
@@ -586,8 +785,10 @@ async function main() {
     const hardwareH = path.join(hardwareDir, 'hardware_driver.h');
     fs.writeFileSync(hardwareC, 'void hardware_driver(void) {}\n');
     fs.writeFileSync(hardwareH, '#pragma once\n');
-    await fireExternalCreated(hardwareC, hardwareH);
+    await fireExternalCreated(hardwareDir);
     await waitForReference('hardware_driver.c');
+    await fireExternalCreated(hardwareDir, hardwareC, hardwareH);
+    assert.strictEqual(referenceCount('hardware_driver.c'), 1, 'overlapping directory and file events must deduplicate');
     assert.strictEqual(await groupForFile('hardware_driver.c'), 'HARDWARE',
         'Explorer-copied sources should create and use the matching Keil group');
     assert.strictEqual(referenceCount('hardware_driver.h'), 0,
@@ -933,7 +1134,11 @@ async function main() {
     await commands.get('project.close')(projects[0]);
     projects[0].close();
     latestTask = undefined;
+    const savesBeforeF7 = events.filter((value) => value === 'save').length;
     await commands.get('project.build')();
+    await commands.get('project.rebuild')();
+    assert.strictEqual(contextKeys.get('keilAssistant.hasActiveTarget'), false);
+    assert.strictEqual(events.filter((value) => value === 'save').length, savesBeforeF7);
     assert.strictEqual(latestTask, undefined, 'F7 should not build a closed project');
     dialogSelection = vscode.Uri.file(projectPath);
     await commands.get('explorer.open')();
@@ -1125,11 +1330,15 @@ async function main() {
     assert.strictEqual(provider.getChildren().length, 0);
     assert.strictEqual(referenceCount('auto_without_open_project.c'), 0,
         'automatic addition must not reopen or edit a closed Keil project');
-    console.log('Smoke test passed: discovery, auto-add, status bar, build/rebuild-then-download, Chinese download progress, task lifecycle, build cwd, IntelliSense, watcher, project editing, close/F7.');
+    const workspaceRoot = await testProjectOwnershipAndRestore();
+    await testArmCompilerCpu(workspaceRoot);
+    await testDownloadToolControls(workspaceRoot);
+    console.log('Smoke test passed: project ownership and restore, directory imports, target isolation, CPU macros, shortcuts, compile/download and project editing.');
     await require('./test_project_edit').run(extensionRoot);
 }
 
 main().catch((error) => { console.error(error); process.exitCode = 1; }).finally(() => {
+    for (const project of provider?.getChildren() || []) { project.close(); }
     Module._load = originalLoad;
     childProcess.spawn = originalSpawn;
     const resolvedTestRoot = path.resolve(testRoot);

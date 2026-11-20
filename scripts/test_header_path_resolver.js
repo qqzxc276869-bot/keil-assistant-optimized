@@ -9,11 +9,14 @@ async function run() {
         '..\\USER\\main.h(14): error: #5: cannot open source input file "lcd.h": No such file or directory',
         '..\\BSP\\TPAD.c(3): error: #5: cannot open source input file "lcd.h": No such file or directory',
         'main.c:4:10: fatal error: drivers/touch.h: No such file or directory',
+        "main.c:1:10: fatal error: 'display/lcd.h' file not found",
+        'main.c:2:10: fatal error: "board pins.h" file not found',
         '*** ERROR C318 IN LINE 5 OF main.c: CAN\'T OPEN FILE \'BOARD.H\'',
         'warning: cannot open source input file "unused.h"',
         '..\\USER\\main.h(15): error: #5: cannot open source input file "../missing.h"'
     ].join('\n');
-    assert.deepStrictEqual(missingHeadersFromBuildLog(messages), ['lcd.h', 'drivers/touch.h', 'BOARD.H']);
+    assert.deepStrictEqual(missingHeadersFromBuildLog(messages),
+        ['lcd.h', 'drivers/touch.h', 'display/lcd.h', 'board pins.h', 'BOARD.H']);
 
     const root = fs.mkdtempSync(path.join(__dirname, '..', '.keil-header-path-test-'));
     try {
