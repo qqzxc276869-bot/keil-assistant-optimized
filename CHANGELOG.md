@@ -2,6 +2,12 @@
 
 记录 Keil Assistant 各版本的重要变化。
 
+## [v1.7.29] 添加反馈与联系方式
+
+- 中文和英文说明新增维护者邮箱和 GitHub Issues 入口，方便反馈问题和建议。
+
+***
+
 ## [v1.7.28] 切换 Keil 下载工具并显示 USB 状态
 
 - 底部状态栏和 Keil 工程树可切换当前 Target 的下载驱动。下拉列表读取本机 Keil 安装，包含适用的 ST-Link、J-Link、CMSIS-DAP、ULINK 等选项。

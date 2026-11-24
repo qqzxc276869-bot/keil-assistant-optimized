@@ -84,6 +84,11 @@ Keil Assistant 在 VS Code 中显示 Keil C51/ARM 工程，并通过 Keil uVisio
 - `KeilAssistant.Project.ExcludeList`：排除不需要发现的工程文件；可填写文件名或相对于工作区的路径，默认值为空列表 `[]`。
 - `KeilAssistant.Project.FileLocationList`：可选，填写要加载的工程文件路径，用于明确指定工作区外或不便扫描的工程。
 
+## 反馈与联系
+
+- [提交问题或建议](https://github.com/qqzxc276869-bot/keil-assistant-optimized/issues)
+- 维护者邮箱 [qqzxc276869@gmail.com](mailto:qqzxc276869@gmail.com)
+
 ## 原项目
 
 - [原版 Keil Assistant（已归档）](https://github.com/github0null/keil-assistant)

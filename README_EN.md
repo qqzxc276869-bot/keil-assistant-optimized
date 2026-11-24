@@ -82,6 +82,11 @@ The extension generates `.vscode/c_cpp_properties.json` in the workspace contain
 - `KeilAssistant.Project.ExcludeList`: Excludes projects from discovery by filename or workspace-relative path. The default is an empty list, `[]`.
 - `KeilAssistant.Project.FileLocationList`: Optional project file paths for projects outside the workspace or paths that are inconvenient to scan.
 
+## Feedback and contact
+
+- [Report an issue or suggest an improvement](https://github.com/qqzxc276869-bot/keil-assistant-optimized/issues)
+- Maintainer email [qqzxc276869@gmail.com](mailto:qqzxc276869@gmail.com)
+
 ## Original project
 
 - [Original Keil Assistant (archived)](https://github.com/github0null/keil-assistant)
