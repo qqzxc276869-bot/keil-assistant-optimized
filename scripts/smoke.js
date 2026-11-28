@@ -931,7 +931,35 @@ async function main() {
     fs.writeFileSync(ambiguousPath, '');
     await fireCreated(ambiguousPath);
     fs.writeFileSync(ambiguousPath, 'void auto_ambiguous(void) {}\n');
-    await fireSaved(ambiguousPath);
+    const originalPicker = vscode.window.showQuickPick;
+    let pickStarted;
+    let confirmGroup;
+    const visiblePicker = new Promise(resolve => { pickStarted = resolve; });
+    const groupDecision = new Promise(resolve => { confirmGroup = resolve; });
+    const beforeFirstSaveBuild = taskCount();
+    try {
+        vscode.window.showQuickPick = async (...args) => {
+            pickStarted();
+            await groupDecision;
+            return originalPicker(...args);
+        };
+        const firstSave = fireSaved(ambiguousPath);
+        await visiblePicker;
+        const buildWithNewFile = commands.get('project.buildAndDownload')();
+        await new Promise(resolve => setTimeout(resolve, 30));
+        assert.strictEqual(taskCount(), beforeFirstSaveBuild, 'build must wait for the first-save group choice');
+        confirmGroup();
+        await firstSave;
+        await waitForTaskCount(beforeFirstSaveBuild + 1);
+        assert.strictEqual(await groupForFile('auto_ambiguous.c'), 'Board & IO');
+        finishTask();
+        await waitForTaskCount(beforeFirstSaveBuild + 2);
+        finishTask();
+        await buildWithNewFile;
+    } finally {
+        confirmGroup();
+        vscode.window.showQuickPick = originalPicker;
+    }
     await waitForReference('auto_ambiguous.c');
     quickPickSelection = undefined;
     assert.strictEqual(await groupForFile('auto_ambiguous.c'), 'Board & IO',
@@ -940,6 +968,22 @@ async function main() {
         'a directory shared by groups should ask once for its default group');
     assert.ok(state.has('KeilAssistant.AutoAdd.DirectoryMappings'),
         'the selected directory-to-group mapping should be remembered in workspace state');
+
+    const failedImport = path.join(sourceDir, 'unsaved_membership.c');
+    fs.writeFileSync(failedImport, '');
+    await fireCreated(failedImport);
+    const renameBeforeFailure = fs.renameSync;
+    const tasksBeforeFailure = taskCount();
+    try {
+        fs.renameSync = (from, to) => {
+            if (to === projectPath) { throw new Error('test project write failed'); }
+            return renameBeforeFailure(from, to);
+        };
+        const failingSave = fireSaved(failedImport);
+        await Promise.all([failingSave, commands.get('project.rebuildAndDownload')()]);
+    } finally { fs.renameSync = renameBeforeFailure; }
+    assert.strictEqual(taskCount(), tasksBeforeFailure, 'a failed pending file addition must stop build and flash');
+    assert.strictEqual(referenceCount('unsaved_membership.c'), 0);
 
     const rememberedPath = path.join(sourceDir, 'auto_remembered.c');
     const quickPicksBeforeRemembered = events.filter((value) => value === 'quickPick').length;
@@ -1334,6 +1378,7 @@ async function main() {
     await testArmCompilerCpu(workspaceRoot);
     await testDownloadToolControls(workspaceRoot);
     console.log('Smoke test passed: project ownership and restore, directory imports, target isolation, CPU macros, shortcuts, compile/download and project editing.');
+    childProcess.spawn = originalSpawn; // The editor suite opens real Windows file handles in a helper process.
     await require('./test_project_edit').run(extensionRoot);
 }
 

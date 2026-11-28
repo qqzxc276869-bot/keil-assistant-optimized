@@ -9,7 +9,7 @@ import * as child_process from 'child_process';
 import { File } from '../lib/node_utility/File';
 import { ResourceManager } from './ResourceManager';
 import { Time } from '../lib/node_utility/Time';
-import { addFilesToKeilProject, addIncludeDirectoryToKeilProject, createGroupInKeilProject,
+import { addFilesWithIncludePaths, addIncludeDirectoryToKeilProject, createGroupInKeilProject,
     getKeilFileType, readKeilDownloadConfiguration, removeFileFromKeilProject, removeGroupFromKeilProject,
     setKeilDownloadDriver,
     SUPPORTED_KEIL_FILE_EXTENSIONS } from './KeilProjectEditor';
@@ -140,14 +140,14 @@ export function activate(context: vscode.ExtensionContext) {
 
     subscriber.push(vscode.commands.registerCommand('project.build', async (item: IView) => {
         const target = prjExplorer.getTarget(item);
-        if (target && await vscode.workspace.saveAll()) {
+        if (target && await prjExplorer.saveBuildInputs(target, '编译')) {
             prjExplorer.getTargetByIdentity(target.prjID, target.targetName)?.build();
         }
     }));
 
     subscriber.push(vscode.commands.registerCommand('project.rebuild', async (item: IView) => {
         const target = prjExplorer.getTarget(item);
-        if (target && await vscode.workspace.saveAll()) {
+        if (target && await prjExplorer.saveBuildInputs(target, '重新编译')) {
             prjExplorer.getTargetByIdentity(target.prjID, target.targetName)?.rebuild();
         }
     }));
@@ -162,10 +162,7 @@ export function activate(context: vscode.ExtensionContext) {
     const compileAndDownload = async (item: IView | undefined, rebuild: boolean) => {
         const target = prjExplorer.getTarget(item);
         if (!target) { return; }
-        if (!await vscode.workspace.saveAll()) {
-            vscode.window.showWarningMessage(`文件未保存，已取消 Keil ${rebuild ? '重新编译' : '编译'}和下载。`);
-            return;
-        }
+        if (!await prjExplorer.saveBuildInputs(target, rebuild ? '重新编译和下载' : '编译和下载')) { return; }
         const projectId = target.prjID;
         const targetName = target.targetName;
         const compilingTarget = prjExplorer.getTargetByIdentity(projectId, targetName);
@@ -1760,6 +1757,7 @@ interface AutoAddDestination {
     project: KeilProject;
     target: Target;
     group: FileGroup;
+    createGroup?: boolean;
 }
 
 interface AutoAddDirectoryMapping {
@@ -1772,7 +1770,10 @@ interface QueuedAutoAdd {
     path: string;
     cancelled: boolean;
     external: boolean;
+    result?: Promise<boolean>;
 }
+
+class AutoAddSourceChanged extends Error {}
 
 class ProjectExplorer implements vscode.TreeDataProvider<IView> {
 
@@ -1785,9 +1786,10 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
     private readonly queuedAutoAdds = new Set<QueuedAutoAdd>();
     private readonly discoveredProjects = new Set<string>();
     private readonly externalChanges = new Set<string>();
-    private externalBatch?: Promise<void>;
+    private externalBatch?: Promise<boolean>;
     private autoAddQueue: Promise<void> = Promise.resolve();
-    private readonly projectEditQueues = new Map<string, Promise<void>>();
+    private readonly projectEditQueues = new Map<string, Promise<boolean>>();
+    private readonly pendingImports = new Map<string, Set<Promise<boolean>>>();
 
     onDidChangeTreeData: vscode.Event<IView | undefined>;
     private viewEvent: vscode.EventEmitter<IView | undefined>;
@@ -1856,14 +1858,14 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
         }
     }
 
-    autoAddSavedFile(document: vscode.TextDocument, initialLoad: Promise<void>): Promise<void> {
-        if (document.uri.scheme !== 'file') { return Promise.resolve(); }
+    async autoAddSavedFile(document: vscode.TextDocument, initialLoad: Promise<void>): Promise<void> {
+        if (document.uri.scheme !== 'file') { return; }
         const sourcePath = document.uri.fsPath;
         const key = normalizedFileKey(sourcePath);
-        if (!this.pendingCreatedFiles.has(key) || document.isDirty) { return Promise.resolve(); }
+        if (!this.pendingCreatedFiles.has(key) || document.isDirty) { return; }
         this.pendingCreatedFiles.delete(key);
-        if (!this.autoAddEnabled(document.uri)) { return Promise.resolve(); }
-        return this.queueAutoAdd(sourcePath, initialLoad, false);
+        if (!this.autoAddEnabled(document.uri)) { return; }
+        await this.queueAutoAdd(sourcePath, initialLoad, false);
     }
 
     async autoAddExternalFile(uri: vscode.Uri, initialLoad: Promise<void>): Promise<void> {
@@ -1871,6 +1873,14 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
         const workspace = vscode.workspace.getWorkspaceFolder(uri);
         if (!workspace) { return; }
         if (ignoredImportPath(uri.fsPath, workspace)) { return; }
+        if (!isAutoAddSource(uri.fsPath) && !/\.uvprojx?$/i.test(uri.fsPath)) {
+            try {
+                if (!fs.lstatSync(uri.fsPath).isDirectory()) { return; }
+            } catch (error) {
+                // A watcher event can outlive a temporary file or a moved directory.
+                return;
+            }
+        }
         this.externalChanges.add(uri.fsPath);
         if (!this.externalBatch) {
             // Merge directory and descendant events from one copy. Give VS Code's own
@@ -1880,14 +1890,64 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
                 this.externalChanges.clear();
                 this.externalBatch = undefined;
                 await initialLoad;
-                if (!this.prjList.size) { return; }
+                if (!this.prjList.size) { return true; }
                 const files = await this.collectImportFiles(paths);
-                if (!files) { return; }
-                await Promise.all(files.filter((path) => this.autoAddEnabled(vscode.Uri.file(path)))
+                if (!files) { return false; }
+                const results = await Promise.all(files.filter((path) => this.autoAddEnabled(vscode.Uri.file(path)))
                     .map((path) => this.queueAutoAdd(path, initialLoad, true)));
-            }).catch((error) => { vscode.window.showWarningMessage('读取新增文件失败：' + error.message); });
+                return results.every((ok) => ok);
+            }).catch((error) => { vscode.window.showWarningMessage('读取新增文件失败：' + error.message); return false; });
         }
-        return this.externalBatch;
+        await this.trackImport(uri.fsPath, this.externalBatch);
+    }
+
+    private trackImport(file: string, task: Promise<boolean>): Promise<boolean> {
+        const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(file));
+        const key = normalizedFileKey(folder?.uri.fsPath || node_path.dirname(file));
+        const pending = this.pendingImports.get(key) || new Set<Promise<boolean>>();
+        if (!pending.has(task)) {
+            this.pendingImports.set(key, pending);
+            pending.add(task);
+            task.then(() => {
+                pending.delete(task);
+                if (!pending.size) { this.pendingImports.delete(key); }
+            });
+        }
+        return task;
+    }
+
+    async saveBuildInputs(target: Target, action: string): Promise<boolean> {
+        const project = this.prjList.get(target.prjID);
+        if (!project) { return false; }
+        const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(project.uvprjFile.path));
+        const key = normalizedFileKey(folder?.uri.fsPath || project.uvprjFile.dir);
+        const collect = () => {
+            const pending = new Set(this.pendingImports.get(key));
+            if (!folder) {
+                for (const [directory, tasks] of this.pendingImports) {
+                    if (isPathAtOrUnder(directory, key)) { tasks.forEach((task) => pending.add(task)); }
+                }
+            }
+            const edit = this.projectEditQueues.get(project.prjID);
+            if (edit) { pending.add(edit); }
+            return Array.from(pending);
+        };
+        const pendingBeforeSave = collect();
+        if (!await vscode.workspace.saveAll()) {
+            vscode.window.showWarningMessage(`文件未保存，已取消 Keil ${action}。`);
+            return false;
+        }
+        // A first save can start an import or a group picker while saveAll is resolving.
+        let pending = pendingBeforeSave.concat(collect());
+        while (pending.length) {
+            if ((await Promise.all(pending)).some((ok) => !ok)) {
+                vscode.window.showWarningMessage(`工程文件更新失败，已取消 Keil ${action}。`);
+                return false;
+            }
+            if (this.prjList.get(project.prjID) !== project) { return false; }
+            pending = collect();
+        }
+        return this.prjList.get(project.prjID) === project;
     }
 
     private async collectImportFiles(paths: string[]): Promise<string[] | undefined> {
@@ -1966,10 +2026,13 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
         vscode.window.showInformationMessage(`已检查 ${files.length} 个文件，请在 Keil 工程树查看结果。`);
     }
 
-    private queueAutoAdd(sourcePath: string, initialLoad: Promise<void>, external: boolean): Promise<void> {
+    private queueAutoAdd(sourcePath: string, initialLoad: Promise<void>, external: boolean): Promise<boolean> {
         const key = normalizedFileKey(sourcePath);
-        if (external && (this.pendingCreatedFiles.has(key) || Array.from(this.queuedAutoAdds)
-            .some((item) => !item.cancelled && normalizedFileKey(item.path) === key))) { return this.autoAddQueue; }
+        if (external) {
+            const queued = Array.from(this.queuedAutoAdds).find((item) => !item.cancelled && normalizedFileKey(item.path) === key);
+            if (queued?.result) { return queued.result; }
+            if (this.pendingCreatedFiles.has(key)) { return Promise.resolve(true); }
+        }
         const queued: QueuedAutoAdd = { path: sourcePath, cancelled: false, external };
         this.queuedAutoAdds.add(queued);
         const task = this.autoAddQueue.then(async () => {
@@ -1980,10 +2043,12 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
                 this.queuedAutoAdds.delete(queued);
             }
         });
-        this.autoAddQueue = task.then(() => undefined, (error) => {
+        queued.result = task.then(() => true, (error) => {
             vscode.window.showErrorMessage(`无法自动将 ${node_path.basename(queued.path)} 加入 Keil 工程：${(<Error>error).message}`);
+            return false;
         });
-        return this.autoAddQueue;
+        this.autoAddQueue = queued.result.then(() => undefined);
+        return this.trackImport(sourcePath, queued.result);
     }
 
     private getAutoAddMappings(): Record<string, AutoAddDirectoryMapping> {
@@ -2112,20 +2177,8 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
                     other.target.targetName === choice.target.targetName) === index);
                 if (destinations.length === 1) {
                     const destination = destinations[0];
-                    const project = destination.project;
-                    await this.serializeProjectEdit(project, async () => {
-                        if (queued.cancelled || !await vscode.workspace.saveAll() || queued.cancelled ||
-                            this.prjList.get(project.prjID) !== project ||
-                            normalizedFileKey(queued.path) !== normalizedFileKey(sourcePath) ||
-                            !new File(sourcePath).IsFile()) { return; }
-                        const result = await createGroupInKeilProject(project.uvprjFile.path,
-                            destination.target.targetName, folderName);
-                        if (result.status === 'created') { await project.reload(); }
-                    });
-                    const target = project.getTargetByName(destination.target.targetName);
-                    const group = target?.getFileGroups().find((item) => item.label === folderName);
-                    if (target && group) { return { project, target, group }; }
-                    return undefined;
+                    const group = new FileGroup(destination.project.prjID, folderName, false, destination.target.targetName);
+                    return { ...destination, group, createGroup: true };
                 }
             }
         }
@@ -2166,9 +2219,10 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
             if (!chosen) { return; }
             const project = this.prjList.get(chosen.project.prjID);
             const target = project?.getTargetByName(chosen.target.targetName);
-            const group = target?.getFileGroups().find((item) => item.label === chosen.group.label);
+            const group = chosen.createGroup ? chosen.group :
+                target?.getFileGroups().find((item) => item.label === chosen.group.label);
             if (!project || !target || !group || !new File(sourcePath).IsFile()) { return; }
-            const applied = await this.addSelectedFiles(project, target, group, [sourcePath], [], true, queued);
+            const applied = await this.addSelectedFiles(project, target, group, [sourcePath], [], queued, chosen.createGroup);
             if (applied || queued.cancelled) { return; }
         }
     }
@@ -2176,17 +2230,21 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
     private async serializeProjectEdit<T>(project: KeilProject, edit: () => Promise<T>): Promise<T> {
         const key = project.prjID;
         const previous = this.projectEditQueues.get(key) || Promise.resolve();
-        let release: () => void = () => {};
-        const gate = new Promise<void>((resolve) => { release = resolve; });
+        let release: (ok: boolean) => void = () => {};
+        const gate = new Promise<boolean>((resolve) => { release = resolve; });
         this.projectEditQueues.set(key, gate);
         await previous;
         try {
             if (this.prjList.get(key) !== project) {
                 throw new Error('所选 Keil 工程已关闭。');
             }
-            return await edit();
+            const result = await edit();
+            release(true);
+            return result;
+        } catch (error) {
+            release(false);
+            throw error;
         } finally {
-            release();
             if (this.projectEditQueues.get(key) === gate) { this.projectEditQueues.delete(key); }
         }
     }
@@ -2638,19 +2696,29 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
     }
 
     private async addSelectedFiles(project: KeilProject, target: Target, group: FileGroup,
-        sourcePaths: string[], initiallySkipped: string[], alreadySaved: boolean = false,
-        queued?: QueuedAutoAdd): Promise<boolean> {
+        sourcePaths: string[], initiallySkipped: string[], queued?: QueuedAutoAdd, createGroup = false): Promise<boolean> {
         return this.serializeProjectEdit(project, async () => {
-            if (queued && (queued.cancelled || normalizedFileKey(queued.path) !== normalizedFileKey(sourcePaths[0]) ||
-                !new File(sourcePaths[0]).IsFile())) { return false; }
-            await this.addSelectedFilesNow(project, target, group, sourcePaths, initiallySkipped,
-                alreadySaved, !!queued?.external);
-            return true;
+            const checkSelection = () => {
+                if (this.prjList.get(project.prjID) !== project) { throw new Error('所选 Keil 工程已关闭。'); }
+                if (queued && (queued.cancelled || normalizedFileKey(queued.path) !== normalizedFileKey(sourcePaths[0]) ||
+                    !new File(sourcePaths[0]).IsFile())) { throw new AutoAddSourceChanged(); }
+            };
+            try {
+                checkSelection();
+                if ((!queued || createGroup) && !await vscode.workspace.saveAll()) { return true; }
+                checkSelection();
+                await this.addSelectedFilesNow(project, target, group, sourcePaths, initiallySkipped,
+                    !!queued?.external, createGroup, checkSelection);
+                return true;
+            } catch (error) {
+                if (error instanceof AutoAddSourceChanged) { return false; }
+                throw error;
+            }
         });
     }
 
     private async addSelectedFilesNow(project: KeilProject, target: Target, group: FileGroup,
-        sourcePaths: string[], initiallySkipped: string[], alreadySaved: boolean, quiet: boolean = false) {
+        sourcePaths: string[], initiallySkipped: string[], quiet: boolean, createGroup: boolean, checkSelection: () => void) {
         const skipped = initiallySkipped.slice();
         const paths = sourcePaths.filter((sourcePath) => {
             if (group.excludedFromBuild && getKeilFileType(sourcePath) !== '5') {
@@ -2663,9 +2731,6 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
             vscode.window.showWarningMessage(`没有添加文件：${this.reportSkippedFiles(skipped)}`);
             return;
         }
-        if (!alreadySaved && !await vscode.workspace.saveAll()) { return; }
-
-        const results = await addFilesToKeilProject(project.uvprjFile.path, target.targetName, group.label, paths);
         const headerDirs = new Map<string, string>();
         paths.forEach((sourcePath) => {
             const directory = node_path.dirname(sourcePath);
@@ -2674,17 +2739,8 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
             const key = process.platform === 'win32' ? directory.toLowerCase() : directory;
             headerDirs.set(key, directory);
         });
-        let includeChanged = 0;
-        const includeErrors: string[] = [];
-        for (const directory of headerDirs.values()) {
-            try {
-                const includeResult = await addIncludeDirectoryToKeilProject(project.uvprjFile.path,
-                    target.targetName, directory);
-                if (includeResult.status === 'created') { includeChanged++; }
-            } catch (error) {
-                includeErrors.push(`${directory}: ${(<Error>error).message}`);
-            }
-        }
+        const { results, includeChanged, includeErrors } = await addFilesWithIncludePaths(project.uvprjFile.path,
+            target.targetName, group.label, paths, Array.from(headerDirs.values()), createGroup, checkSelection);
 
         const added = results.filter((result) => result.status === 'added').length;
         if (added || includeChanged) {
@@ -2708,7 +2764,7 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
             if (result.status === 'already-present') {
                 vscode.window.showInformationMessage(`${fileName} 已在 ${target.targetName} / ${result.groupName} 分组中${includeChanged ? '；已将头文件目录加入 IncludePath' : ''}。`);
             } else {
-                vscode.window.showInformationMessage(`已将 ${fileName} 加入 ${target.targetName} / ${group.label} 分组${includeChanged ? '，并将其目录加入 IncludePath' : ''}。`);
+                this.showAddedFilesMessage(`已将 ${fileName} 加入 ${target.targetName} / ${group.label} 分组${includeChanged ? '，并将其目录加入 IncludePath' : ''}。`);
             }
             return;
         }
@@ -2727,7 +2783,15 @@ class ProjectExplorer implements vscode.TreeDataProvider<IView> {
         if (skipped.length || includeErrors.length) {
             vscode.window.showWarningMessage(`${summary} ${details}`);
         } else {
-            vscode.window.showInformationMessage(`${summary} ${details}`);
+            this.showAddedFilesMessage(`${summary} ${details}`);
+        }
+    }
+
+    private async showAddedFilesMessage(message: string) {
+        const help = 'Keil 工程树未刷新？';
+        if (await vscode.window.showInformationMessage(message, help) === help) {
+            vscode.window.showInformationMessage('切回 Keil，在工程的 Reload? 提示中选择“是”。要自动刷新，可在 ' +
+                'Edit → Configuration → Editor 中勾选 Automatic reload of externally modified files。');
         }
     }
 

@@ -58,6 +58,8 @@ Keil Assistant 在 VS Code 中显示 Keil C51/ARM 工程，并通过 Keil uVisio
 
 - **直接管理 Keil 工程树**：在插件的工程树中右键工程或 Target，选择 **新建 Keil 分组**；右键分组可选择 **将文件添加到 Keil 分组** 或 **删除 Keil 分组（保留磁盘文件）**。删除非空分组前会提示确认，分组内的工程引用会移除，磁盘文件保留。右键分组中的文件选择 **从 Keil 工程移除文件引用**，只移除单个引用。这些命令也能从命令面板运行。VS Code 自带资源管理器中的 **删除** 会删除磁盘文件。
 
+- **Keil 和 VS Code 同时打开同一工程**。如果刚在 Keil 中改过工程选项，先在 Keil 点 **Save All**。在 VS Code 添加文件后，切回 Keil，看到 **Project File … has been modified externally, Reload ?** 时选 **是**，新文件就会出现在对应分组。希望以后自动刷新，可在 Keil 的 **Edit → Configuration → Editor → File and Project Handling** 勾选 **Automatic reload of externally modified files**。这个设置也会自动重载外部修改的源文件。[Keil 编辑器设置说明](https://www.keil.com/support/man/docs/uv4cl/uv4cl_dg_editsettings.htm)
+
 - **在 Keil 中修改工程后刷新**：添加或删除源文件、修改头文件路径等操作后，在 Keil 中点击 **保存所有**。插件检测到工程文件变化后会刷新项目视图。
 
   ![keil_save_all](./res/preview/keil_save_all.png)

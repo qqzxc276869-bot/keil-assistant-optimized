@@ -2,6 +2,30 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const xml2js = require('xml2js');
+const { spawn } = require('child_process');
+
+async function withWindowsReader(file, sharing, work) {
+    const script = [
+        "$ErrorActionPreference = 'Stop'",
+        "$reader = [IO.File]::Open($env:KEIL_TEST_PROJECT, 'Open', 'Read', $env:KEIL_TEST_SHARING)",
+        "try { [Console]::WriteLine('ready'); [void][Console]::ReadLine() } finally { $reader.Dispose() }"
+    ].join('\n');
+    const reader = spawn(path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'),
+        ['-NoProfile', '-NonInteractive', '-Command', script], {
+        env: { ...process.env, KEIL_TEST_PROJECT: file, KEIL_TEST_SHARING: sharing }, windowsHide: true
+    });
+    const done = new Promise((resolve, reject) => { reader.on('close', resolve); reader.on('error', reject); });
+    const timeout = setTimeout(() => reader.kill(), 15000);
+    try {
+        const ready = new Promise((resolve) => reader.stdout.once('data', (line) => resolve(line.toString().trim())));
+        assert.strictEqual(await Promise.race([ready, done]), 'ready', 'Windows test reader must own the handle');
+        await work();
+    } finally {
+        reader.stdin.end('\n');
+        clearTimeout(timeout);
+        await done;
+    }
+}
 
 function asArray(value) {
     return value === undefined ? [] : Array.isArray(value) ? value : [value];
@@ -28,7 +52,7 @@ function getFiles(group) {
 }
 
 async function run(extensionRoot = path.resolve(__dirname, '..')) {
-    const { addFileToKeilProject, addFilesToKeilProject, getKeilFileType,
+    const { addFileToKeilProject, addFilesToKeilProject, addFilesWithIncludePaths, getKeilFileType,
         createGroupInKeilProject, removeGroupFromKeilProject,
         removeFileFromKeilProject, addIncludeDirectoryToKeilProject } =
         require(path.join(extensionRoot, 'dist', 'src', 'KeilProjectEditor'));
@@ -393,7 +417,53 @@ async function run(extensionRoot = path.resolve(__dirname, '..')) {
         await assert.rejects(() => addIncludeDirectoryToKeilProject(projectPath, 'Debug', newIncludeDir),
             /C 编译器选项不存在或不唯一/, 'a target without Keil C compiler options should be rejected');
 
-        console.log('Project edit test passed: add/remove file, create group/include paths, no-op, stale references, target isolation, CRLF, XML, .uvproj.');
+        const sharedProject = path.join(projectDir, 'Keil 打开 & shared.uvprojx');
+        const initialShared = '\uFEFF' + includeXml;
+        fs.writeFileSync(sharedProject, initialShared);
+        const externalSave = initialShared.replace('</Project>', '<!-- Keil saved other settings --></Project>');
+        let simulateSave = true;
+        let commits = 0;
+        fs.renameSync = (from, to) => {
+            if (to === sharedProject) { commits++; }
+            return originalRename(from, to);
+        };
+        try {
+            const combined = await addFilesWithIncludePaths(sharedProject, 'Debug', 'Board',
+                [cPath, extraPath], [newIncludeDir], true, () => {
+                    if (simulateSave) { simulateSave = false; fs.writeFileSync(sharedProject, externalSave); }
+                });
+            assert.deepStrictEqual(combined.results.map(file => file.status), ['added', 'added']);
+            assert.strictEqual(combined.includeChanged, 1);
+            assert.deepStrictEqual(combined.includeErrors, []);
+            assert.strictEqual(commits, 1, 'files, the new group and IncludePath must share a single commit');
+            const updated = fs.readFileSync(sharedProject, 'utf8');
+            assert.ok(updated.startsWith('\uFEFF') && updated.includes(releaseIncludeSection) &&
+                updated.includes('<!-- Keil saved other settings -->') && !/(^|[^\r])\n/.test(updated));
+            assert.deepStrictEqual(getFiles(getGroup(getTarget(await parseXml(updated), 'Debug'), 'Board'))
+                .map(file => file.FileName), ['clock.c', 'extra.c']);
+            await addFilesWithIncludePaths(sharedProject, 'Debug', 'Unneeded', [cPath], [newIncludeDir], true);
+            assert.strictEqual(fs.readFileSync(sharedProject, 'utf8'), updated,
+                'a duplicate import must not leave an empty group or trigger another IDE reload');
+        } finally { fs.renameSync = originalRename; }
+
+        if (process.platform === 'win32') {
+            // Both shares refuse delete/rename. Only the first permits an exclusive writer.
+            await withWindowsReader(sharedProject, 'ReadWrite', async () => {
+                const added = await addFileToKeilProject(sharedProject, 'Debug', 'Board', cppPath);
+                assert.strictEqual(added.status, 'added');
+                assert.strictEqual((await removeFileFromKeilProject(sharedProject, 'Debug', 'Board', cppPath)).status,
+                    'removed', 'shrinking the XML must truncate the old suffix');
+                await parseXml(fs.readFileSync(sharedProject, 'utf8'));
+            });
+            await withWindowsReader(sharedProject, 'Read', async () => {
+                const before = fs.readFileSync(sharedProject);
+                await assert.rejects(addFileToKeilProject(sharedProject, 'Debug', 'Board', cppPath), /无法写入/);
+                assert.deepStrictEqual(fs.readFileSync(sharedProject), before);
+            });
+            assert.ok(!fs.readdirSync(projectDir).some(name => name.includes('.keil-assistant-')),
+                'handled sharing violations must leave no temporary files or backups');
+        }
+        console.log('Project edit tests passed: files, groups, includes, one commit per add, concurrent saves and Windows sharing modes.');
     } finally {
         const resolvedTestRoot = path.resolve(testRoot);
         if (path.dirname(resolvedTestRoot) === scratchParent &&

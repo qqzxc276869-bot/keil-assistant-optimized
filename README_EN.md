@@ -56,6 +56,8 @@ Keil Assistant displays Keil C51/ARM projects in VS Code and uses Keil uVision t
 
 - **Manage the Keil project tree directly**: Right-click a project or target in the extension's project tree and choose **新建 Keil 分组**. Right-click a group to choose **将文件添加到 Keil 分组** or **删除 Keil 分组（保留磁盘文件）**. Removing a nonempty group asks for confirmation, removes its project references, and keeps disk files. Right-click a file in a group and choose **从 Keil 工程移除文件引用** to remove only that reference. These commands also work from the Command Palette. **Delete** in VS Code's built-in Explorer deletes disk files.
 
+- **Keep µVision open while adding files in VS Code.** Save any pending project settings in µVision first. After an addition, switch back to µVision and choose **Yes** at the **Project File … has been modified externally, Reload ?** prompt. For automatic refresh, enable **Automatic reload of externally modified files** under **Edit → Configuration → Editor → File and Project Handling**. This option also reloads externally modified source files. [Keil editor settings](https://www.keil.com/support/man/docs/uv4cl/uv4cl_dg_editsettings.htm)
+
 - **Refresh after changing the project in Keil**: After adding or removing source files or editing include paths in Keil, click **Save All** there. The project view refreshes when the extension detects the project file change.
 
   ![keil_save_all](./res/preview/keil_save_all.png)

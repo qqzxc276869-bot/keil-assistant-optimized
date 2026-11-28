@@ -1,7 +1,7 @@
-import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as node_path from 'path';
 import * as xml2js from 'xml2js';
+import { isWindowsFileBusy, ProjectChangedError, writeProjectChange } from './KeilProjectWrite';
 
 export interface AddFileResult {
     status: 'added' | 'already-present';
@@ -183,19 +183,25 @@ function decodeUtf8Project(buffer: Buffer): string {
     return xml;
 }
 
-function writeProjectChange(projectPath: string, original: Buffer | undefined, updated: string): void {
-    const temporaryPath = `${projectPath}.keil-assistant-${process.pid}-${crypto.randomBytes(4).toString('hex')}.tmp`;
-    try {
-        fs.writeFileSync(temporaryPath, updated, { encoding: 'utf8', flag: 'wx' });
-        if (original === undefined) {
-            fs.copyFileSync(temporaryPath, projectPath, fs.constants.COPYFILE_EXCL);
-        } else if (buffersEqual(fs.readFileSync(projectPath), original)) {
-            fs.renameSync(temporaryPath, projectPath);
-        } else {
-            throw new Error('编辑期间 Keil 工程发生变化，请重试。');
+// Additions are idempotent. If µVision saves while we prepare an edit, calculate
+// it again against the new file so that its settings and other groups survive.
+async function applyAdditions<T>(projectPath: string,
+    edit: (xml: string) => Promise<{ xml: string; result: T }>, beforeWrite?: () => void): Promise<T> {
+    for (let attempt = 0; ; attempt++) {
+        try {
+            const { buffer, xml } = readUtf8Project(projectPath);
+            const change = await edit(xml);
+            if (change.xml !== xml) { await writeProjectChange(projectPath, buffer, change.xml, beforeWrite); }
+            else if (!fs.readFileSync(projectPath).equals(buffer)) { throw new ProjectChangedError(); }
+            return change.result;
+        } catch (error) {
+            const busy = isWindowsFileBusy(error);
+            if (attempt >= 3 || !(busy || error instanceof ProjectChangedError || error.code === 'ENOENT')) {
+                if (busy) { throw new Error(`无法读取或更新 ${node_path.basename(projectPath)}，请等 Keil 保存完成后重试。`); }
+                throw error;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)));
         }
-    } finally {
-        if (fs.existsSync(temporaryPath)) { fs.unlinkSync(temporaryPath); }
     }
 }
 
@@ -223,10 +229,9 @@ function elementRemovalRange(xml: string, element: XmlElement): { start: number,
     return { start: element.start, end: element.end };
 }
 
-/** Add multiple saved files to exactly one target and group in one project write. */
-export async function addFilesToKeilProject(projectPath: string, targetName: string, groupName: string,
-    sourcePaths: string[]): Promise<AddFileResult[]> {
-    if (!sourcePaths.length) { return []; }
+async function insertFileReferences(xml: string, projectPath: string, targetName: string, groupName: string,
+    sourcePaths: string[]): Promise<{ xml: string; result: AddFileResult[] }> {
+    if (!sourcePaths.length) { return { xml, result: [] }; }
     const sources = sourcePaths.map((sourcePath) => {
         const fileType = getKeilFileType(sourcePath);
         if (!fileType) {
@@ -238,13 +243,8 @@ export async function addFilesToKeilProject(projectPath: string, targetName: str
         return { path: node_path.resolve(sourcePath), fileType };
     });
     const projectDir = node_path.dirname(projectPath);
-    const { buffer, xml } = readUtf8Project(projectPath);
     const parser = new xml2js.Parser({ explicitArray: false });
-    const document = await parser.parseStringPromise(xml);
-    const targetData = asArray<any>(document.Project && document.Project.Targets && document.Project.Targets.Target);
-    const targetIndex = targetData.findIndex((target) => target.TargetName === targetName);
-    if (targetIndex < 0) { throw new Error(`找不到 Keil 编译目标：${targetName}`); }
-    const target = targetData[targetIndex];
+    const { data: target, index: targetIndex, count } = await findNamedTarget(xml, false, targetName);
     const groupData = asArray<any>(target.Groups && target.Groups.Group);
     const matchingGroups = groupData.map((group, index) => group.GroupName === groupName ? index : -1)
         .filter((index) => index >= 0);
@@ -276,9 +276,13 @@ export async function addFilesToKeilProject(projectPath: string, targetName: str
             results.push({ status: 'added', groupName });
         }
     }
-    if (!additions.length) { return results; }
+    if (!additions.length) { return { xml, result: results }; }
+    if (groupData[groupIndex].GroupOption?.CommonProperty?.IncludeInBuild === '0' &&
+        additions.some((source) => source.fileType !== '5')) {
+        throw new Error(`Keil 分组 ${groupName} 已排除编译，请重新选择分组。`);
+    }
 
-    const groupElements = direct(one(targetElement(xml, targetData.length, targetIndex), 'Groups'), 'Group');
+    const groupElements = direct(one(targetElement(xml, count, targetIndex), 'Groups'), 'Group');
     if (groupElements.length !== groupData.length) {
         throw new Error('无法安全地匹配 Keil 分组结构。');
     }
@@ -327,8 +331,35 @@ export async function addFilesToKeilProject(projectPath: string, targetName: str
         }
     }
 
-    writeProjectChange(projectPath, buffer, updated);
-    return results;
+    return { xml: updated, result: results };
+}
+
+/** Commit file references and their compiler search paths in one visible project update. */
+export function addFilesWithIncludePaths(projectPath: string, targetName: string, groupName: string,
+    paths: string[], includeDirs: string[], createGroup = false, beforeWrite?: () => void) {
+    return applyAdditions(projectPath, async (xml) => {
+        const grouped = createGroup && paths.length ? await insertGroup(xml, targetName, groupName) : xml;
+        const files = await insertFileReferences(grouped, projectPath, targetName, groupName, paths);
+        let updated = files.result.some((file) => file.status === 'added') ? files.xml : xml;
+        let includeChanged = 0;
+        const includeErrors: string[] = [];
+        for (const directory of includeDirs) {
+            try {
+                const next = await insertIncludeDirectory(updated, projectPath, targetName, directory);
+                if (next !== updated) { includeChanged++; }
+                updated = next;
+            } catch (error) {
+                includeErrors.push(`${directory}: ${(<Error>error).message}`);
+            }
+        }
+        return { xml: updated, result: { results: files.result, includeChanged, includeErrors } };
+    }, beforeWrite);
+}
+
+export async function addFilesToKeilProject(projectPath: string, targetName: string, groupName: string,
+    sourcePaths: string[]): Promise<AddFileResult[]> {
+    if (!sourcePaths.length) { return []; }
+    return (await addFilesWithIncludePaths(projectPath, targetName, groupName, sourcePaths, [])).results;
 }
 
 /** Preserve the single-file API for existing extension commands and callers. */
@@ -341,22 +372,25 @@ export async function addFileToKeilProject(projectPath: string, targetName: stri
 /** Create a virtual Keil group in one target. No disk folder is created. */
 export async function createGroupInKeilProject(projectPath: string, targetName: string,
     groupName: string): Promise<ProjectEditResult> {
+    return applyAdditions<ProjectEditResult>(projectPath, async (xml) => {
+        const updated = await insertGroup(xml, targetName, groupName);
+        return { xml: updated, result: { status: updated === xml ? 'already-present' : 'created' } };
+    });
+}
+
+async function insertGroup(xml: string, targetName: string, groupName: string): Promise<string> {
     const name = groupName.trim();
     if (!name || /[\u0000-\u001f]/.test(name)) {
         throw new Error('Keil 分组名不能为空，也不能包含控制字符。');
     }
-    const { buffer, xml } = readUtf8Project(projectPath);
     const parser = new xml2js.Parser({ explicitArray: false });
-    const document = await parser.parseStringPromise(xml);
-    const targets = asArray<any>(document.Project && document.Project.Targets && document.Project.Targets.Target);
-    const targetIndex = targets.findIndex((target) => target.TargetName === targetName);
-    if (targetIndex < 0) { throw new Error(`找不到 Keil 编译目标：${targetName}`); }
-    const groups = asArray<any>(targets[targetIndex].Groups && targets[targetIndex].Groups.Group);
+    const { data, index: targetIndex, count } = await findNamedTarget(xml, false, targetName);
+    const groups = asArray<any>(data.Groups && data.Groups.Group);
     if (groups.some((group) => group.GroupName === name)) {
-        return { status: 'already-present' };
+        return xml;
     }
 
-    const target = targetElement(xml, targets.length, targetIndex);
+    const target = targetElement(xml, count, targetIndex);
     const targetNameElement = one(target, 'TargetName');
     const eol = xml.includes('\r\n') ? '\r\n' : '\n';
     const unit = indentUnit(xml, target, targetNameElement);
@@ -390,8 +424,7 @@ export async function createGroupInKeilProject(projectPath: string, targetName: 
     if (afterGroups.length !== groups.length + 1 || !afterGroups.some((group) => group.GroupName === name)) {
         throw new Error('无法验证新建的 Keil 分组，工程未保存。');
     }
-    writeProjectChange(projectPath, buffer, updated);
-    return { status: 'created' };
+    return updated;
 }
 
 /** Remove a virtual group and its project references, leaving disk files untouched. */
@@ -421,7 +454,7 @@ export async function removeGroupFromKeilProject(projectPath: string, targetName
     if (afterGroups.length !== groups.length - 1 || afterGroups.some((group) => group.GroupName === groupName)) {
         throw new Error('无法验证已删除的 Keil 分组，工程未保存。');
     }
-    writeProjectChange(projectPath, buffer, updated);
+    await writeProjectChange(projectPath, buffer, updated);
     return { status: 'removed' };
 }
 
@@ -472,7 +505,7 @@ export async function removeFileFromKeilProject(projectPath: string, targetName:
         projectPathKey(projectDir, file.FilePath) === sourceKey)) {
         throw new Error('无法验证已移除的 Keil 文件引用，工程未保存。');
     }
-    writeProjectChange(projectPath, buffer, updated);
+    await writeProjectChange(projectPath, buffer, updated);
     return { status: 'removed' };
 }
 
@@ -618,19 +651,29 @@ export async function setKeilDownloadDriver(projectPath: string, targetName: str
     const nextOptions = replaceElementText(optionsXml, one(debug, 'pMon'), dll);
     const optionsChanged = !originalOptions || !buffersEqual(Buffer.from(nextOptions, 'utf8'), originalOptions);
     if (!optionsChanged && nextProject === project.xml) { return false; }
-    beforeWrite();
-    if (!buffersEqual(fs.readFileSync(projectPath), project.buffer)) {
-        throw new Error('编辑期间 Keil 工程发生变化，请重试。');
-    }
-    if (optionsChanged) { writeProjectChange(optionsPath, originalOptions, nextOptions); }
+    const checkProject = () => {
+        beforeWrite();
+        if (!fs.readFileSync(projectPath).equals(project.buffer)) { throw new ProjectChangedError(); }
+    };
+    checkProject();
+    if (optionsChanged) { await writeProjectChange(optionsPath, originalOptions, nextOptions, checkProject); }
     try {
-        if (nextProject !== project.xml) { writeProjectChange(projectPath, project.buffer, nextProject); }
+        checkProject();
+        if (nextProject !== project.xml) {
+            const checkOptions = () => {
+                beforeWrite();
+                if (!fs.readFileSync(optionsPath).equals(Buffer.from(nextOptions, 'utf8'))) {
+                    throw new ProjectChangedError();
+                }
+            };
+            await writeProjectChange(projectPath, project.buffer, nextProject, checkOptions);
+        }
     } catch (error) {
         if (optionsChanged) {
             const written = Buffer.from(nextOptions, 'utf8');
             try {
                 if (originalOptions) {
-                    writeProjectChange(optionsPath, written, decodeUtf8Project(originalOptions));
+                    await writeProjectChange(optionsPath, written, decodeUtf8Project(originalOptions));
                 } else if (buffersEqual(fs.readFileSync(optionsPath), written)) {
                     fs.unlinkSync(optionsPath);
                 }
@@ -646,6 +689,14 @@ export async function setKeilDownloadDriver(projectPath: string, targetName: str
 /** Add an existing directory to one target's compiler include paths. Other targets are untouched. */
 export async function addIncludeDirectoryToKeilProject(projectPath: string, targetName: string,
     includeDir: string): Promise<ProjectEditResult> {
+    return applyAdditions<ProjectEditResult>(projectPath, async (xml) => {
+        const updated = await insertIncludeDirectory(xml, projectPath, targetName, includeDir);
+        return { xml: updated, result: { status: updated === xml ? 'already-present' : 'created' } };
+    });
+}
+
+async function insertIncludeDirectory(xml: string, projectPath: string, targetName: string,
+    includeDir: string): Promise<string> {
     const absoluteDir = node_path.resolve(includeDir);
     if (!fs.statSync(absoluteDir).isDirectory()) {
         throw new Error(`头文件路径不是文件夹：${includeDir}`);
@@ -656,7 +707,6 @@ export async function addIncludeDirectoryToKeilProject(projectPath: string, targ
         throw new Error('该文件夹无法写入 Keil 头文件搜索路径列表。');
     }
 
-    const { buffer, xml } = readUtf8Project(projectPath);
     const parser = new xml2js.Parser({ explicitArray: false });
     const document = await parser.parseStringPromise(xml);
     const targets = asArray<any>(document.Project && document.Project.Targets && document.Project.Targets.Target);
@@ -681,7 +731,7 @@ export async function addIncludeDirectoryToKeilProject(projectPath: string, targ
     const desiredKey = projectPathKey(projectDir, absoluteDir);
     if (currentPath.split(';').some((entry) => entry.trim() &&
         projectPathKey(projectDir, entry.trim()) === desiredKey)) {
-        return { status: 'already-present' };
+        return xml;
     }
 
     const target = targetElement(xml, targets.length, targetIndex);
@@ -754,6 +804,5 @@ export async function addIncludeDirectoryToKeilProject(projectPath: string, targ
             projectPathKey(projectDir, entry.trim()) === desiredKey).length !== 1) {
         throw new Error('无法验证修改后的 Keil 头文件路径，工程未保存。');
     }
-    writeProjectChange(projectPath, buffer, updated);
-    return { status: 'created' };
+    return updated;
 }

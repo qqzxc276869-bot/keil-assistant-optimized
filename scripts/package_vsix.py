@@ -4,6 +4,7 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from xml.sax.saxutils import escape
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -11,10 +12,6 @@ from zipfile import ZIP_DEFLATED, ZipFile
 ROOT = Path(__file__).resolve().parent.parent
 PACKAGE = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
 OUTPUT = ROOT / f"keil-assistant-{PACKAGE['version']}.vsix"
-
-# Never leave a same-version package that predates the current source tree.
-if OUTPUT.is_file():
-    OUTPUT.unlink()
 
 npm = shutil.which("npm")
 if npm is None:
@@ -115,19 +112,23 @@ content_type_lines.extend((
 ))
 content_types = "\n".join(content_type_lines)
 
-with ZipFile(OUTPUT, "w", ZIP_DEFLATED) as archive:
-    archive.writestr("[Content_Types].xml", content_types)
-    archive.writestr("extension.vsixmanifest", manifest)
-    archive.writestr("extension/LICENSE.txt", (ROOT / "LICENSE").read_bytes())
-    for file in FILES:
-        archive.write(file, "extension/" + file.relative_to(ROOT).as_posix())
+# Keep any existing installer available until its replacement has been validated.
+with TemporaryDirectory(prefix=".keil-vsix-", dir=ROOT) as staging:
+    candidate = Path(staging) / OUTPUT.name
+    with ZipFile(candidate, "w", ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types)
+        archive.writestr("extension.vsixmanifest", manifest)
+        archive.writestr("extension/LICENSE.txt", (ROOT / "LICENSE").read_bytes())
+        for file in FILES:
+            archive.write(file, "extension/" + file.relative_to(ROOT).as_posix())
 
-with ZipFile(OUTPUT) as archive:
-    if archive.testzip() is not None:
-        raise SystemExit("VSIX archive validation failed")
-    if "extension/" + PACKAGE["main"].lstrip("./") not in archive.namelist():
-        raise SystemExit("VSIX is missing its main JavaScript file")
-    if "extension/LICENSE" not in archive.namelist():
-        raise SystemExit("VSIX is missing the README license link target")
+    with ZipFile(candidate) as archive:
+        if archive.testzip() is not None:
+            raise SystemExit("VSIX archive validation failed")
+        if "extension/" + PACKAGE["main"].lstrip("./") not in archive.namelist():
+            raise SystemExit("VSIX is missing its main JavaScript file")
+        if "extension/LICENSE" not in archive.namelist():
+            raise SystemExit("VSIX is missing the README license link target")
+    candidate.replace(OUTPUT)
 
 print(OUTPUT)
